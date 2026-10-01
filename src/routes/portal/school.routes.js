@@ -1,0 +1,10 @@
+import { Router } from "express";
+import { listSchools, createSchool, updateSchool, deleteSchool } from "../../controllers/portal/school.controllers.js";
+import { verifyJWT } from "../../middlewares/auth/auth.middlewares.js";
+import { requireAdmin } from "../../middlewares/auth/admin.middlewares.js";
+const router = Router();
+router.get("/", verifyJWT, requireAdmin, listSchools);
+router.post("/", verifyJWT, requireAdmin, createSchool);
+router.patch("/:id", verifyJWT, requireAdmin, updateSchool);
+router.delete("/:id", verifyJWT, requireAdmin, deleteSchool);
+export default router;

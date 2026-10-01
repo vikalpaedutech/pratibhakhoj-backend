@@ -1,0 +1,12 @@
+import { Router } from "express";
+import { addRegion,regionTemplate,bulkRegionUpload,updateDistrict,updateBlock,updateSchool,deactivateDistrict,deactivateBlock,deactivateSchool } from "../../controllers/portal/adminRegion.controllers.js";
+import { bulkUpload } from "../../middlewares/upload/student.upload.js";
+import { verifyJWT } from "../../middlewares/auth/auth.middlewares.js";
+import { requireAdmin } from "../../middlewares/auth/admin.middlewares.js";
+const router=Router(); router.use(verifyJWT,requireAdmin);
+router.post("/",addRegion);
+router.get("/template",regionTemplate);
+router.post("/bulk",bulkUpload.single("file"),bulkRegionUpload);
+router.patch("/district/:id",updateDistrict); router.patch("/block/:id",updateBlock); router.patch("/school/:id",updateSchool);
+router.delete("/district/:id",deactivateDistrict); router.delete("/block/:id",deactivateBlock); router.delete("/school/:id",deactivateSchool);
+export default router;
