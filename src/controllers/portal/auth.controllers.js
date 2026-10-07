@@ -13,6 +13,8 @@ import { ApiError } from "../../utils/api-error.js";
 import { ApiResponse } from "../../utils/api-response.js";
 import { asyncHandler } from "../../utils/async-handler.js";
 import { hashOtp } from "../../utils/portal.utils.js";
+import { getEffectivePermissionCodes } from "../../services/portal/permission.service.js";
+import { createEmailVerificationToken, hashEmailVerificationToken, sendVerificationEmail } from "../../services/portal/email.service.js";
 
 const ROLE_SCOPE = {
   ACI: "district",
@@ -143,26 +145,34 @@ export const getRegistrationRoles = asyncHandler(async (_req, res) => {
 });
 
 export const registerUser = asyncHandler(async (req, res) => {
-  const { name, contact, roleId, regions = [] } = req.body;
+  const { name, contact, email, roleId, regions = [] } = req.body;
 
-  if (!name || !contact || !roleId) {
-    throw new ApiError(400, "Name, designation and mobile number are required");
+  if (!name || !contact || !email || !roleId) {
+    throw new ApiError(400, "Name, email, designation and mobile number are required");
   }
   if (!/^\d{10}$/.test(String(contact))) {
     throw new ApiError(400, "Mobile number must be exactly 10 digits");
   }
+  const normalizedEmail = String(email).trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    throw new ApiError(400, "Enter a valid email address");
+  }
 
-  const [existing, role] = await Promise.all([
+  const [existing, role, emailOwner] = await Promise.all([
     User.findOne({ contact: String(contact) }),
     Role.findOne({ _id: roleId, isActive: true, isSelfSelectable: true }),
+    User.findOne({ email: normalizedEmail }).select("_id contact isVerified"),
   ]);
 
   if (!role) throw new ApiError(400, "Invalid designation");
-  const normalizedRegions = await validateRegions(role, regions);
-
+  if (emailOwner && String(emailOwner.contact) !== String(contact)) {
+    throw new ApiError(409, "This email address is already associated with another account.");
+  }
   if (existing?.isVerified) {
     throw new ApiError(409, "This mobile number is already registered. Please login.");
   }
+
+  const normalizedRegions = await validateRegions(role, regions);
 
   let user = existing;
   if (!user) {
@@ -170,12 +180,14 @@ export const registerUser = asyncHandler(async (req, res) => {
       userId: `USR-${Date.now().toString(36).toUpperCase()}`,
       name: String(name).trim(),
       contact: String(contact),
+      email: normalizedEmail,
       roleId: role._id,
       isVerified: false,
       isActive: false,
     });
   } else {
     user.name = String(name).trim();
+    user.email = normalizedEmail;
     user.roleId = role._id;
     user.isVerified = false;
     user.isActive = false;
@@ -184,20 +196,96 @@ export const registerUser = asyncHandler(async (req, res) => {
     user.registrationTokenExpiresAt = undefined;
   }
 
+  const verificationToken = createEmailVerificationToken();
+  user.emailVerificationTokenHash = hashEmailVerificationToken(verificationToken);
+  user.emailVerificationTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   await user.save({ validateBeforeSave: false });
   await replaceRegionAccess(user._id, normalizedRegions);
 
-  const otp = await sendOtp(user);
+  const allowedOrigins = String(process.env.FRONTEND_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const requestOrigin = String(req.get("origin") || "").trim().replace(/\/$/, "");
+  const refererOrigin = (() => {
+    try { return new URL(req.get("referer") || "").origin; } catch { return ""; }
+  })();
+  const frontendOrigin = (requestOrigin && (!allowedOrigins.length || allowedOrigins.includes(requestOrigin)))
+    ? requestOrigin
+    : (refererOrigin && (!allowedOrigins.length || allowedOrigins.includes(refererOrigin)) ? refererOrigin : allowedOrigins[0]);
+
+  if (!frontendOrigin) {
+    throw new ApiError(500, "Unable to determine the frontend URL for email verification. Configure FRONTEND_ORIGINS.");
+  }
+
+  const verificationUrl = `${frontendOrigin}/official/verify-email?token=${encodeURIComponent(verificationToken)}`;
+  try {
+    await sendVerificationEmail({ to: normalizedEmail, verificationUrl, name: user.name });
+  } catch (error) {
+    console.error("Verification email send failed:", error.message);
+    throw new ApiError(502, "Unable to send the verification email. Please verify the email settings and try again.");
+  }
 
   res.status(existing ? 200 : 201).json(
     new ApiResponse(
       existing ? 200 : 201,
-      { contact: user.contact, otp, otpRequired: true },
-      existing
-        ? "This account is not verified yet. A new OTP has been generated."
-        : "Registration details saved. Verify your mobile number to continue."
+      { contact: user.contact, email: user.email, verificationSent: true },
+      "Verification link sent to your email address. Please check your inbox to continue."
     )
   );
+});
+
+export const resendVerificationEmail = asyncHandler(async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400, "Enter a valid email address");
+
+  const user = await User.findOne({ email });
+  if (!user) throw new ApiError(404, "No registration was found for this email address.");
+  if (user.isVerified) throw new ApiError(400, "This email address is already verified. Please login.");
+
+  const verificationToken = createEmailVerificationToken();
+  user.emailVerificationTokenHash = hashEmailVerificationToken(verificationToken);
+  user.emailVerificationTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await user.save({ validateBeforeSave: false });
+
+  const allowedOrigins = String(process.env.FRONTEND_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const requestOrigin = String(req.get("origin") || "").trim().replace(/\/$/, "");
+  const frontendOrigin = requestOrigin && (!allowedOrigins.length || allowedOrigins.includes(requestOrigin)) ? requestOrigin : allowedOrigins[0];
+  if (!frontendOrigin) throw new ApiError(500, "Unable to determine the frontend URL for email verification. Configure FRONTEND_ORIGINS.");
+
+  try {
+    await sendVerificationEmail({
+      to: user.email,
+      verificationUrl: `${frontendOrigin}/official/verify-email?token=${encodeURIComponent(verificationToken)}`,
+      name: user.name,
+    });
+  } catch (error) {
+    console.error("Verification email resend failed:", error.message);
+    throw new ApiError(502, "Unable to send the verification email. Please try again later.");
+  }
+
+  res.json(new ApiResponse(200, { email: user.email, verificationSent: true }, "Verification link sent again."));
+});
+
+export const verifyEmail = asyncHandler(async (req, res) => {
+  const token = String(req.query.token || req.body.token || "").trim();
+  if (!token) throw new ApiError(400, "Verification link is missing.");
+
+  const tokenHash = hashEmailVerificationToken(token);
+  const user = await User.findOne({
+    emailVerificationTokenHash: tokenHash,
+    emailVerificationTokenExpiresAt: { $gt: new Date() },
+  });
+
+  if (!user) throw new ApiError(400, "This verification link is invalid or has expired. Please request a new verification email.");
+  if (user.isVerified) throw new ApiError(400, "This account is already verified. Please login.");
+
+  const registrationToken = createRegistrationToken(user.contact);
+  user.registrationTokenHash = crypto.createHash("sha256").update(registrationToken).digest("hex");
+  user.registrationTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+  user.isVerified = false;
+  user.emailVerificationTokenHash = undefined;
+  user.emailVerificationTokenExpiresAt = undefined;
+  await user.save({ validateBeforeSave: false });
+
+  res.json(new ApiResponse(200, { contact: user.contact, email: user.email, registrationToken }, "Email verified. Create your password to finish registration."));
 });
 
 export const resendOtp = asyncHandler(async (req, res) => {
@@ -303,19 +391,20 @@ export const loginUser = asyncHandler(async (req, res) => {
   }
 
   if (!user.isVerified) {
-    throw new ApiError(403, "You need to verify your number before login.", [
-      { code: "MOBILE_NOT_VERIFIED", contact: user.contact },
+    throw new ApiError(403, "You need to verify your email before login.", [
+      { code: "EMAIL_NOT_VERIFIED", contact: user.contact, email: user.email },
     ]);
   }
   if (!user.isActive) throw new ApiError(403, "Your account is inactive. Please contact the administrator.");
   if (!user.password || !(await user.isPasswordCorrect(password))) throw new ApiError(401, "Invalid credentials.");
 
   const tokens = await issueTokens(user);
-  const [role, regions, verificationAccess, effectiveDashboardAccess] = await Promise.all([
+  const [role, regions, verificationAccess, effectiveDashboardAccess, effectivePermissions] = await Promise.all([
     Role.findById(user.roleId).select("_id name code description").lean(),
     UserRegionAccess.find({ userId: user._id }).lean(),
     VerificationUser.find({ userId: user._id, isActive: true }).lean(),
     getEffectiveDashboardAccess(user),
+    getEffectivePermissionCodes(user._id, user.roleId),
   ]);
 
   res
@@ -331,17 +420,18 @@ export const loginUser = asyncHandler(async (req, res) => {
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: 10 * 24 * 60 * 60 * 1000,
     })
-    .json(new ApiResponse(200, { user: safeUser(user), role, regions, verificationAccess, dashboardAccess: effectiveDashboardAccess === null ? DASHBOARD_ACCESS_CODES : effectiveDashboardAccess, ...tokens }, "Login successful"));
+    .json(new ApiResponse(200, { user: safeUser(user), role, regions, verificationAccess, dashboardAccess: effectiveDashboardAccess === null ? DASHBOARD_ACCESS_CODES : effectiveDashboardAccess, permissions: effectivePermissions, schoolVisitAccess: effectivePermissions.includes("SCHOOL_VISIT_ACCESS") || role?.code === "ADMIN", ...tokens }, "Login successful"));
 });
 
 export const currentUser = asyncHandler(async (req, res) => {
-  const [role, regions, verificationAccess, effectiveDashboardAccess] = await Promise.all([
+  const [role, regions, verificationAccess, effectiveDashboardAccess, effectivePermissions] = await Promise.all([
     Role.findById(req.user.roleId).select("_id name code description").lean(),
     UserRegionAccess.find({ userId: req.user._id }).lean(),
     VerificationUser.find({ userId: req.user._id, isActive: true }).lean(),
     getEffectiveDashboardAccess(req.user),
+    getEffectivePermissionCodes(req.user._id, req.user.roleId),
   ]);
-  res.json(new ApiResponse(200, { user: safeUser(req.user), role, regions, verificationAccess, dashboardAccess: effectiveDashboardAccess === null ? DASHBOARD_ACCESS_CODES : effectiveDashboardAccess }, "Current user fetched successfully"));
+  res.json(new ApiResponse(200, { user: safeUser(req.user), role, regions, verificationAccess, dashboardAccess: effectiveDashboardAccess === null ? DASHBOARD_ACCESS_CODES : effectiveDashboardAccess, permissions: effectivePermissions, schoolVisitAccess: effectivePermissions.includes("SCHOOL_VISIT_ACCESS") || role?.code === "ADMIN" }, "Current user fetched successfully"));
 });
 
 export const logoutUser = asyncHandler(async (req, res) => {

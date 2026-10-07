@@ -4,6 +4,8 @@ import {
   registerUser,
   resendOtp,
   verifyOtp,
+  resendVerificationEmail,
+  verifyEmail,
   createPassword,
   loginUser,
   currentUser,
@@ -16,7 +18,9 @@ const router = Router();
 router.get("/roles", getRegistrationRoles);
 router.post("/register", registerUser);
 router.post("/resend-otp", resendOtp);
+router.post("/resend-verification-email", resendVerificationEmail);
 router.post("/verify-otp", verifyOtp);
+router.get("/verify-email", verifyEmail);
 router.post("/create-password", createPassword);
 router.post("/login", loginUser);
 router.get("/current-user", verifyJWT, currentUser);

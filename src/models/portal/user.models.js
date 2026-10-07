@@ -9,6 +9,7 @@ const userSchema = new Schema(
     userId: { type: String, unique: true, sparse: true, trim: true, index: true },
     name: { type: String, required: true, trim: true },
     contact: { type: String, required: true, unique: true, trim: true, index: true },
+    email: { type: String, trim: true, lowercase: true, sparse: true, unique: true, index: true },
     password: { type: String, required: false, minlength: 6 },
     roleId: { type: Schema.Types.ObjectId, ref: "Role", required: true, index: true },
     isActive: { type: Boolean, default: true },
@@ -21,6 +22,8 @@ const userSchema = new Schema(
     refreshToken: String,
     registrationTokenHash: { type: String, index: true },
     registrationTokenExpiresAt: Date,
+    emailVerificationTokenHash: { type: String, index: true },
+    emailVerificationTokenExpiresAt: Date,
     profileImage: {
       url: String,
       localPath: String,

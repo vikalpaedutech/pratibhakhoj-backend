@@ -107,15 +107,37 @@ const resolveBulkRegion = async (row, cache = new Map()) => {
   };
 };
 
-const sanitize = (payload, examType) => {
+const normalizeDob = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+
+  if (value instanceof Date) return value;
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed?.y && parsed?.m && parsed?.d) {
+      return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+    }
+  }
+
+  const text = String(value).trim();
+  let match = text.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+  if (match) {
+    const [, day, month, year] = match;
+    return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  }
+
+  return value;
+};
+
+const sanitize = (payload, examType, { bulk = false } = {}) => {
   const exam = getExam(examType);
 
   return {
     studentSrn: String(payload.studentSrn || payload.srn || "").trim(),
     name: String(payload.name || "").trim(),
     fatherName: String(payload.fatherName || payload.father || "").trim(),
-    motherName: String(payload.motherName || payload.mother || "").trim(),
-    dob: payload.dob || null,
+    motherName: cleanString(payload.motherName || payload.mother),
+    dob: normalizeDob(payload.dob ?? payload["dob (dd-mm-yyyy)"]),
     gender: cleanString(payload.gender),
     category: cleanString(payload.category),
     aadhar: cleanString(payload.aadhar),
@@ -125,7 +147,7 @@ const sanitize = (payload, examType) => {
     cityTownVillage: cleanString(payload.cityTownVillage),
     addressBlock: cleanString(payload.addressBlock),
     addressDistrict: cleanString(payload.addressDistrict),
-    addressState: cleanString(payload.addressState) || "Haryana",
+    addressState: bulk ? null : "Haryana",
 
     districtId: payload.districtId || null,
     blockDistrictId: payload.blockDistrictId || null,
@@ -144,14 +166,14 @@ const sanitize = (payload, examType) => {
   };
 };
 
-const validateStudent = async (data, examType) => {
+const validateStudent = async (data, examType, { bulk = false } = {}) => {
   const exam = getExam(examType);
 
   const required = [
     "studentSrn",
     "name",
     "fatherName",
-    "motherName",
+    ...(bulk ? [] : ["motherName"]),
     "dob",
     "gender",
     "category",
@@ -285,8 +307,8 @@ const createStudent = async (
     files = {},
   }
 ) => {
-  const data = sanitize(payload, examType);
-  await validateStudent(data, examType);
+  const data = sanitize(payload, examType, { bulk: isBulkRegistered });
+  await validateStudent(data, examType, { bulk: isBulkRegistered });
 
   const exists = await Student.findOne({
     studentSrn: data.studentSrn,
@@ -590,6 +612,7 @@ export const updateAllRegistrationStudent = asyncHandler(async (req, res) => {
     current.isVerified = false;
     current.verificationStatus = "Pending";
     current.verifiedBy = null;
+    current.verifiedAt = null;
     current.registrationFormVerificationRemark = null;
     await current.save();
   } catch (error) {
@@ -790,6 +813,7 @@ export const updatePublicStudent = asyncHandler(async (req, res) => {
     current.isVerified = false;
     current.verificationStatus = "Pending";
     current.verifiedBy = null;
+    current.verifiedAt = null;
     current.registrationFormVerificationRemark = null;
     await current.save();
   } catch (error) {
@@ -1015,6 +1039,7 @@ export const updateOfficialStudent = asyncHandler(async (req, res) => {
           isVerified: false,
           verificationStatus: "Pending",
           verifiedBy: null,
+          verifiedAt: null,
           registrationFormVerificationRemark: null,
           updatedBy: req.user._id,
           // If another official opened an unverified registration and
@@ -1136,6 +1161,7 @@ export const verifyStudent = asyncHandler(async (req, res) => {
         isVerified: status === "verified",
         verificationStatus: status === "verified" ? "Verified" : "Rejected",
         verifiedBy: req.user._id,
+        verifiedAt: new Date(),
         registrationFormVerificationRemark: remark || null,
       },
     },
@@ -1725,34 +1751,48 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
 
   await ensurePayloadInRegion(req.user._id, payload);
 
+  const templateColumns = [
+    "studentSrn",
+    "name",
+    "fatherName",
+    "dob (dd-mm-yyyy)",
+    "gender",
+    "category",
+    "mobile",
+    "houseNumber",
+    "addressBlock",
+    "addressDistrict",
+    "districtName",
+    "blockName",
+    "schoolName",
+    "previousClassAnnualExamPercentage",
+    "class",
+  ];
+
   const rows = Array.from(
     { length: Math.min(Math.max(Number(count) || 10, 1), 500) },
     () => ({
       studentSrn: "",
       name: "",
       fatherName: "",
-      motherName: "",
-      dob: "",
+      "dob (dd-mm-yyyy)": "",
       gender: "",
       category: "",
-      aadhar: "",
       mobile: "",
-      whatsapp: "",
       houseNumber: "",
-      cityTownVillage: "",
       addressBlock: "",
       addressDistrict: "",
-      addressState: "Haryana",
       districtName: district.districtName,
       blockName: block.blockName,
       schoolName: school.schoolName,
       previousClassAnnualExamPercentage: "",
-      classOfStudent: Number(classOfStudent),
+      class: Number(classOfStudent),
     })
   );
 
+  const worksheet = XLSX.utils.json_to_sheet(rows, { header: templateColumns });
+  worksheet["!cols"] = templateColumns.map((header) => ({ wch: Math.max(16, header.length + 2) }));
   const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.json_to_sheet(rows);
   XLSX.utils.book_append_sheet(workbook, worksheet, "Student Registrations");
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 
@@ -1779,8 +1819,8 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
     try {
       const row = rows[index];
       const resolvedRow = await resolveBulkRegion(row, regionCache);
-      const payload = sanitize(resolvedRow, examType);
-      await validateStudent(payload, examType);
+      const payload = sanitize(resolvedRow, examType, { bulk: true });
+      await validateStudent(payload, examType, { bulk: true });
       await ensurePayloadInRegion(req.user._id, payload);
 
       const existing = await Student.findOne({
@@ -1799,7 +1839,7 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
 
         const beforeUpdate = existing.toObject();
         const merged = { ...beforeUpdate, ...payload, examType };
-        await validateStudent(merged, examType);
+        await validateStudent(merged, examType, { bulk: true });
         const updatedStudent = await Student.findByIdAndUpdate(existing._id, {
           $set: {
             ...payload,
@@ -1811,6 +1851,7 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
             isVerified: true,
             verificationStatus: "Verified",
             verifiedBy: null,
+            verifiedAt: new Date(),
             registrationFormVerificationRemark: BULK_VERIFICATION_REMARK,
           },
         }, { new: true, runValidators: true });

@@ -31,7 +31,7 @@ const schema = new Schema(
     rollNumber: { type: String, default: null, trim: true },
     name: { type: String, required: true, trim: true },
     fatherName: { type: String, required: true, trim: true },
-    motherName: { type: String, required: true, trim: true },
+    motherName: { type: String, trim: true, default: null },
     dob: { type: Date, required: true },
     gender: { type: String, required: true, trim: true },
     category: { type: String, required: true, trim: true },
@@ -82,6 +82,7 @@ const schema = new Schema(
       index: true,
     },
     verifiedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    verifiedAt: { type: Date, default: null, index: true },
     registrationFormVerificationRemark: { type: String, trim: true, default: null },
 
     slipId: { type: String, required: true, unique: true, index: true },

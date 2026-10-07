@@ -16,6 +16,9 @@ import adminRegionRouter from "./routes/portal/adminRegion.routes.js";
 import adminAccessRouter from "./routes/portal/adminAccess.routes.js";
 import adminDashboardAccessRouter from "./routes/portal/adminDashboardAccess.routes.js";
 import dashboardAccessRouter from "./routes/portal/dashboardAccess.routes.js";
+import permissionRouter from "./routes/portal/permission.routes.js";
+import schoolVisitRouter from "./routes/portal/schoolVisit.routes.js";
+import reportDashboardRouter from "./routes/portal/reportDashboard.routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,6 +66,9 @@ app.use("/api/v1/admin/regions", adminRegionRouter);
 app.use("/api/v1/admin/user-region-access", adminAccessRouter);
 app.use("/api/v1/admin/dashboard-access", adminDashboardAccessRouter);
 app.use("/api/v1/dashboard-access", dashboardAccessRouter);
+app.use("/api/v1/admin/permissions", permissionRouter);
+app.use("/api/v1/school-visits", schoolVisitRouter);
+app.use("/api/v1/report-dashboards", reportDashboardRouter);
 
 app.use((_req, res) => {
   res.status(404).json({

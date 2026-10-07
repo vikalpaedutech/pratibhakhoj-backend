@@ -4,6 +4,9 @@ import { School } from "../../models/portal/school.models.js";
 import { Role } from "../../models/portal/role.models.js";
 import { User } from "../../models/portal/user.models.js";
 import { UserRegionAccess } from "../../models/portal/userRegionAccess.models.js";
+import { Permission } from "../../models/portal/permission.models.js";
+import { VisitForm } from "../../models/portal/visitForm.models.js";
+import { db } from "../../db/index.js";
 
 const DUMMY = {
   district: { districtId: "DUMMY-001", districtName: "Dummy District" },
@@ -142,10 +145,57 @@ export const seedDummyRegions = async () => {
   }
 };
 
+
+export const seedPermissions = async () => {
+  const permissions = [
+    {
+      code: "SCHOOL_VISIT_ACCESS",
+      name: "School Visit",
+      module: "School Visit",
+      description: "Allows authorised users to create, complete and upload school visit records.",
+      isActive: true,
+    },
+  ];
+
+  for (const permission of permissions) {
+    await Permission.updateOne(
+      { code: permission.code },
+      { $set: permission },
+      { upsert: true }
+    );
+  }
+};
+
+export const migrateSchoolVisitForms = async () => {
+  const legacy = await db.collection("schoolvisits").find({ form: { $exists: true } }).toArray();
+  for (const visit of legacy) {
+    if (!visit.form) continue;
+    const f = visit.form;
+    await VisitForm.updateOne(
+      { schoolVisitId: visit._id },
+      { $setOnInsert: {
+        schoolVisitId: visit._id, userId: visit.userId, dateOfSLCVisit: visit.visitDate,
+        centreCoordinator: f.schoolCampaign?.centreCoordinator || "",
+        awarenessCampaignActivities: f.activities || [],
+        studentRegistrationStatus: f.studentRegistrationStatus || [],
+        pendingRegistrationFollowUp: f.pendingFollowUp || [],
+        centreCoordinatorName: f.signOff?.centreCoordinatorName || "",
+        schoolHeadName: f.signOff?.schoolHeadName || "",
+        submittedAt: visit.formSubmittedAt || null,
+      } },
+      { upsert: true }
+    );
+    await db.collection("schoolvisits").updateOne({ _id: visit._id }, { $unset: { form: "", formSubmittedAt: "" } });
+  }
+  if (legacy.length) console.log(`School visit form migration checked: ${legacy.length} legacy record(s).`);
+};
+
 export const seedData = async () => {
   await seedRoles();
+  await seedPermissions();
   await seedAdmin();
   await seedDummyRegions();
+  await migrateSchoolVisitForms();
 
   console.log(
     "Seed complete: users, roles, districts, blocks, schools. No external ERP data is imported."
