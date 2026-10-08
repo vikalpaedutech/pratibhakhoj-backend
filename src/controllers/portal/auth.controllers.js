@@ -219,7 +219,12 @@ export const registerUser = asyncHandler(async (req, res) => {
   try {
     await sendVerificationEmail({ to: normalizedEmail, verificationUrl, name: user.name });
   } catch (error) {
-    console.error("Verification email send failed:", error.message);
+    console.error("[Auth] Verification email send failed", {
+      message: error?.message || "Unknown error",
+      statusCode: error?.statusCode || null,
+      brevoCode: error?.brevoCode || null,
+      brevoMessage: error?.brevoMessage || null,
+    });
     throw new ApiError(502, "Unable to send the verification email. Please verify the email settings and try again.");
   }
 
@@ -257,7 +262,12 @@ export const resendVerificationEmail = asyncHandler(async (req, res) => {
       name: user.name,
     });
   } catch (error) {
-    console.error("Verification email resend failed:", error.message);
+    console.error("[Auth] Verification email resend failed", {
+      message: error?.message || "Unknown error",
+      statusCode: error?.statusCode || null,
+      brevoCode: error?.brevoCode || null,
+      brevoMessage: error?.brevoMessage || null,
+    });
     throw new ApiError(502, "Unable to send the verification email. Please try again later.");
   }
 
