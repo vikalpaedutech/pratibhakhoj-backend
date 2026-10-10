@@ -25,7 +25,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:5174,http://localhost:5173, http://64.227.143.155:5174")
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:5174,http://localhost:5173, http://64.227.143.155:5174, https://testing.buniyaadhry.com")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
