@@ -14,7 +14,7 @@ import { ApiResponse } from "../../utils/api-response.js";
 import { asyncHandler } from "../../utils/async-handler.js";
 import { hashOtp } from "../../utils/portal.utils.js";
 import { getEffectivePermissionCodes } from "../../services/portal/permission.service.js";
-import { createEmailVerificationToken, hashEmailVerificationToken, sendVerificationEmail } from "../../services/portal/email.service.js";
+import { createEmailVerificationToken, hashEmailVerificationToken, sendVerificationEmail, sendPasswordResetEmail } from "../../services/portal/email.service.js";
 
 const ROLE_SCOPE = {
   ACI: "district",
@@ -34,6 +34,8 @@ const safeUser = (user) => {
   delete data.otp;
   delete data.registrationTokenHash;
   delete data.registrationTokenExpiresAt;
+  delete data.passwordResetTokenHash;
+  delete data.passwordResetTokenExpiresAt;
   return data;
 };
 
@@ -369,6 +371,94 @@ export const createPassword = asyncHandler(async (req, res) => {
   await user.save();
 
   res.json(new ApiResponse(200, { user: safeUser(user) }, "Account created successfully"));
+});
+
+
+const getAllowedFrontendOrigin = (req) => {
+  const allowedOrigins = String(process.env.FRONTEND_ORIGINS || "")
+    .split(",").map((item) => item.trim().replace(/\/$/, "")).filter(Boolean);
+  const requestOrigin = String(req.get("origin") || "").trim().replace(/\/$/, "");
+  const refererOrigin = (() => {
+    try { return new URL(req.get("referer") || "").origin; } catch { return ""; }
+  })();
+
+  if (requestOrigin && (!allowedOrigins.length || allowedOrigins.includes(requestOrigin))) {
+    return requestOrigin;
+  }
+  if (refererOrigin && (!allowedOrigins.length || allowedOrigins.includes(refererOrigin))) {
+    return refererOrigin;
+  }
+  return allowedOrigins[0] || "";
+};
+
+export const requestPasswordReset = asyncHandler(async (req, res) => {
+  const identifier = String(req.body.contact || req.body.email || "").trim();
+  if (!identifier) {
+    throw new ApiError(400, "Enter your registered mobile number or email address.");
+  }
+
+  const user = /^\d{10}$/.test(identifier)
+    ? await User.findOne({ contact: identifier })
+    : await User.findOne({ email: identifier.toLowerCase() });
+
+  // Always return the same public response to avoid account enumeration.
+  const genericMessage = "If an account with a registered email exists, a password reset link will be sent to it.";
+  if (!user || !user.email || !user.isVerified || !user.isActive) {
+    return res.json(new ApiResponse(200, {}, genericMessage));
+  }
+
+  const frontendOrigin = getAllowedFrontendOrigin(req);
+  if (!frontendOrigin) {
+    throw new ApiError(500, "Password reset URL is not configured. Configure FRONTEND_ORIGINS.");
+  }
+
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  user.passwordResetTokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+  user.passwordResetTokenExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  await user.save({ validateBeforeSave: false });
+
+  const resetUrl = `${frontendOrigin}/official/forgot-password?token=${encodeURIComponent(rawToken)}`;
+  try {
+    await sendPasswordResetEmail({ to: user.email, resetUrl, name: user.name });
+  } catch (error) {
+    user.passwordResetTokenHash = undefined;
+    user.passwordResetTokenExpiresAt = undefined;
+    await user.save({ validateBeforeSave: false });
+    console.error("[Auth] Password reset email send failed:", error?.message || error);
+    throw new ApiError(502, "Unable to send the password reset email. Please try again later.");
+  }
+
+  res.json(new ApiResponse(200, {}, genericMessage));
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const token = String(req.body.token || "").trim();
+  const password = String(req.body.password || "");
+  const confirmPassword = String(req.body.confirmPassword || "");
+
+  if (!token) throw new ApiError(400, "Password reset token is missing.");
+  if (password.length < 6) throw new ApiError(400, "Password must contain at least 6 characters.");
+  if (password !== confirmPassword) throw new ApiError(400, "Passwords do not match.");
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const user = await User.findOne({
+    passwordResetTokenHash: tokenHash,
+    passwordResetTokenExpiresAt: { $gt: new Date() },
+    isVerified: true,
+    isActive: true,
+  });
+
+  if (!user) {
+    throw new ApiError(400, "This password reset link is invalid or expired. Please request a new one.");
+  }
+
+  user.password = password;
+  user.passwordResetTokenHash = undefined;
+  user.passwordResetTokenExpiresAt = undefined;
+  user.refreshToken = undefined;
+  await user.save();
+
+  res.json(new ApiResponse(200, {}, "Password reset successfully. You can now login."));
 });
 
 export const loginUser = asyncHandler(async (req, res) => {

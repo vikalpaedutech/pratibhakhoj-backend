@@ -24,6 +24,8 @@ const userSchema = new Schema(
     registrationTokenExpiresAt: Date,
     emailVerificationTokenHash: { type: String, index: true },
     emailVerificationTokenExpiresAt: Date,
+    passwordResetTokenHash: { type: String, index: true },
+    passwordResetTokenExpiresAt: Date,
     profileImage: {
       url: String,
       localPath: String,

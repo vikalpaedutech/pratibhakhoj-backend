@@ -152,3 +152,62 @@ export const createEmailVerificationToken = () =>
 
 export const hashEmailVerificationToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
+
+
+export const sendPasswordResetEmail = async ({ to, resetUrl, name }) => {
+  const { apiKey, fromEmail, fromName } = getBrevoConfig();
+  const recipientEmail = String(to || "").trim().toLowerCase();
+  if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+    throw new Error("Recipient email address is invalid.");
+  }
+
+  const safeName = escapeHtml(name || "User");
+  const safeResetUrl = escapeHtml(resetUrl);
+  const payload = {
+    sender: { email: fromEmail, name: fromName },
+    to: [{ email: recipientEmail, name: String(name || "User").trim() }],
+    subject: "Reset your Pratibha Khoj portal password",
+    textContent:
+      `Hello ${name || "User"},\n\n` +
+      `Use this link to reset your password:\n${resetUrl}\n\n` +
+      `This link expires in 30 minutes. If you did not request this, ignore this email.\n\n` +
+      `Regards,\nVikalpa Foundation Trust`,
+    htmlContent: `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937"><div style="max-width:620px;margin:32px auto;padding:32px;background:#fff"><h2 style="color:#27356f">Vikalpa Foundation Trust</h2><p>Hello ${safeName},</p><p>We received a request to reset your Pratibha Khoj portal password.</p><p><a href="${safeResetUrl}" style="display:inline-block;background:#27356f;color:#fff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600">Reset password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p><p>Regards,<br>Vikalpa Foundation Trust</p></div></body></html>`,
+  };
+
+  let response;
+  try {
+    response = await fetch(BREVO_API_URL, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "api-key": apiKey,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (error) {
+    throw new Error(`Brevo password reset email request failed: ${error?.message || "network error"}`);
+  }
+
+  const responseText = await response.text();
+  let responseData = {};
+  try {
+    responseData = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    responseData = { raw: responseText };
+  }
+
+  if (!response.ok) {
+    throw createBrevoError({
+      status: response.status,
+      code: responseData?.code,
+      message: responseData?.message,
+      responseBody: responseData,
+    });
+  }
+
+  console.log(`[Brevo] Password reset email accepted | to=${maskEmail(recipientEmail)}`);
+  return responseData;
+};
