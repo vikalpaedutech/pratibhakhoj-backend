@@ -30,6 +30,19 @@ const dateRange = (startDate, endDate, field = "createdAt") => {
 };
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const queryIds = (value) => {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return [...new Set(values.flatMap((item) => String(item).split(",")).map((item) => item.trim()).filter(Boolean))];
+};
+const regionStudentFilter = ({ districtIds = [], blockIds = [] } = {}) => {
+  const filter = {};
+  const districts = queryIds(districtIds);
+  const blocks = queryIds(blockIds);
+  if (districts.length) filter.districtId = { $in: districts };
+  if (blocks.length) filter.blockDistrictId = { $in: blocks };
+  return filter;
+};
 const makeWorkbook = (rows, sheet = "Report", linkColumn = "") => {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -111,11 +124,11 @@ const regionLabels = async (userIds) => {
   return map;
 };
 
-const userSummaryRows = async ({ roleId, startDate, endDate }) => {
+const userSummaryRows = async ({ roleId, startDate, endDate, districtIds = [], blockIds = [] }) => {
   const users = await User.find({ isActive: true, ...(roleId ? { roleId } : {}) }).select("_id name contact roleId").lean();
   const roleMap = await getRoleMap([...new Set(users.map((u) => String(u.roleId))) ]);
   const regions = await regionLabels(users.map((u) => u._id));
-  const match = { isActive: true, isRegisteredBy: { $in: users.map((u) => u._id) }, ...dateRange(startDate, endDate) };
+  const match = { isActive: true, isRegisteredBy: { $in: users.map((u) => u._id) }, ...dateRange(startDate, endDate), ...regionStudentFilter({ districtIds, blockIds }) };
   const counts = users.length ? await Student.aggregate([
     { $match: match },
     { $group: { _id: { user: "$isRegisteredBy", exam: "$examType" }, count: { $sum: 1 } } },
@@ -132,8 +145,8 @@ const userSummaryRows = async ({ roleId, startDate, endDate }) => {
   });
 };
 
-const registrationStats = async ({ startDate, endDate }) => {
-  const match = { isActive: true, ...dateRange(startDate, endDate) };
+const registrationStats = async ({ startDate, endDate, districtIds = [], blockIds = [] }) => {
+  const match = { isActive: true, ...dateRange(startDate, endDate), ...regionStudentFilter({ districtIds, blockIds }) };
   const rows = await Student.aggregate([{ $match: match }, { $group: { _id: { exam: "$examType", registeredBy: { $cond: [{ $ne: ["$isRegisteredBy", null] }, "user", "self"] } }, count: { $sum: 1 } } }]);
   const verified = await Student.aggregate([{ $match: match }, { $group: { _id: { exam: "$examType", status: "$verificationStatus" }, count: { $sum: 1 } } }]);
   const out = {};
@@ -147,21 +160,25 @@ const registrationStats = async ({ startDate, endDate }) => {
 
 export const registrationsByUsers = asyncHandler(async (req, res) => {
   const { roleId = "", startDate = "", endDate = "" } = req.query;
-  const stats = await registrationStats({ startDate, endDate });
-  const rows = roleId ? await userSummaryRows({ roleId, startDate, endDate }) : [];
+  const districtIds = queryIds(req.query.districtIds ?? req.query.districtId);
+  const blockIds = queryIds(req.query.blockIds ?? req.query.blockId);
+  const stats = await registrationStats({ startDate, endDate, districtIds, blockIds });
+  const rows = roleId ? await userSummaryRows({ roleId, startDate, endDate, districtIds, blockIds }) : [];
   const roles = await Role.find({ isActive: true }).select("_id name code").sort({ name: 1 }).lean();
   res.json(new ApiResponse(200, { stats, rows, roles, roleSelected: Boolean(roleId) }, "Registrations by users dashboard fetched"));
 });
 
 export const exportRegistrationsByUsers = asyncHandler(async (req, res) => {
   const { roleId = "", startDate = "", endDate = "" } = req.query;
+  const districtIds = queryIds(req.query.districtIds ?? req.query.districtId);
+  const blockIds = queryIds(req.query.blockIds ?? req.query.blockId);
   if (!roleId) throw new ApiError(400, "Role is required for export");
-  const rows = await userSummaryRows({ roleId, startDate, endDate });
+  const rows = await userSummaryRows({ roleId, startDate, endDate, districtIds, blockIds });
   const buffer = makeWorkbook(rows, "Registrations By Users");
   sendXlsx(res, buffer, "registrations-by-users.xlsx");
 });
 
-const verificationRows = async ({ search = "", startDate = "", endDate = "" }) => {
+const verificationRows = async ({ search = "", startDate = "", endDate = "", districtIds = [], blockIds = [] }) => {
   const users = await VerificationUser.find({ isActive: true })
     .populate({ path: "userId", select: "_id name contact roleId", populate: { path: "roleId", select: "name code" } })
     .lean();
@@ -172,11 +189,19 @@ const verificationRows = async ({ search = "", startDate = "", endDate = "" }) =
   for (const assignment of filtered) {
     const make = async (exam) => {
       if (!assignment.examType?.includes(exam)) return { pending: 0, verified: 0, rejected: 0 };
-      const region = assignment.region?.length ? { districtId: { $in: assignment.region } } : {};
+      const selectedDistricts = queryIds(districtIds);
+      const selectedBlocks = queryIds(blockIds);
+      const assignedDistricts = (assignment.region || []).map(String);
+      const districts = selectedDistricts.length
+        ? selectedDistricts.filter((id) => !assignedDistricts.length || assignedDistricts.includes(id))
+        : assignedDistricts;
+      if (selectedDistricts.length && !districts.length) return { pending: 0, verified: 0, rejected: 0 };
+      const region = districts.length ? { districtId: { $in: districts } } : {};
+      const blockFilter = selectedBlocks.length ? { blockDistrictId: { $in: selectedBlocks } } : {};
       const [pending, verified, rejected] = await Promise.all([
-        Student.countDocuments({ isActive: true, examType: exam, verificationStatus: "Pending", ...region }),
-        Student.countDocuments({ isActive: true, examType: exam, verificationStatus: "Verified", verifiedBy: assignment.userId._id, ...region, ...verifiedRange }),
-        Student.countDocuments({ isActive: true, examType: exam, verificationStatus: "Rejected", verifiedBy: assignment.userId._id, ...region, ...verifiedRange }),
+        Student.countDocuments({ isActive: true, examType: exam, verificationStatus: "Pending", ...region, ...blockFilter }),
+        Student.countDocuments({ isActive: true, examType: exam, verificationStatus: "Verified", verifiedBy: assignment.userId._id, ...region, ...blockFilter, ...verifiedRange }),
+        Student.countDocuments({ isActive: true, examType: exam, verificationStatus: "Rejected", verifiedBy: assignment.userId._id, ...region, ...blockFilter, ...verifiedRange }),
       ]);
       return { pending, verified, rejected };
     };
@@ -192,12 +217,12 @@ const verificationRows = async ({ search = "", startDate = "", endDate = "" }) =
 };
 
 export const verificationByUsers = asyncHandler(async (req, res) => {
-  const rows = await verificationRows(req.query);
+  const rows = await verificationRows({ ...req.query, districtIds: queryIds(req.query.districtIds ?? req.query.districtId), blockIds: queryIds(req.query.blockIds ?? req.query.blockId) });
   res.json(new ApiResponse(200, { rows }, "Verification by users dashboard fetched"));
 });
 
 export const exportVerificationByUsers = asyncHandler(async (req, res) => {
-  const rows = await verificationRows(req.query);
+  const rows = await verificationRows({ ...req.query, districtIds: queryIds(req.query.districtIds ?? req.query.districtId), blockIds: queryIds(req.query.blockIds ?? req.query.blockId) });
   if (String(req.query.format || "xlsx").toLowerCase() === "pdf") return sendPdf(res, "Verification By Users", Object.keys(rows[0] || { UserName: "" }), rows, "verification-by-users.pdf");
   sendXlsx(res, makeWorkbook(rows, "Verification By Users"), "verification-by-users.xlsx");
 });
