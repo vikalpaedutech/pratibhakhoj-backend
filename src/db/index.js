@@ -7,7 +7,10 @@ const connectDb = async () => {
   if (!uri) throw new Error("MONGODB_URI is required");
 
   await mongoose.connect(uri, {
-    dbName: process.env.DB_NAME || "pratibhakhojVikalpa",
+    // dbName: process.env.DB_NAME || "pratibhakhojVikalpa",
+    
+     dbName: process.env.DB_NAME || "pratibhakhojVikalpaTesting",
+
   });
 
   console.log(`MongoDB connected: ${process.env.DB_NAME || "pratibhakhojVikalpa"}`);
