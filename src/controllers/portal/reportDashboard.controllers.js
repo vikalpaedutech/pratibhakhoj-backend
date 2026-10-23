@@ -48,6 +48,7 @@ const makeWorkbook = (rows, sheet = "Report", linkColumn = "") => {
 };
 
 const sendXlsx = (res, buffer, filename) => {
+  res.setTimeout(0);
   res.set({
     "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "Content-Disposition": `attachment; filename="${filename}"`,
@@ -57,6 +58,7 @@ const sendXlsx = (res, buffer, filename) => {
 };
 
 const sendPdf = (res, title, columns, rows, filename) => {
+  res.setTimeout(0);
   const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 24 });
   const chunks = [];
   doc.on("data", (chunk) => chunks.push(chunk));

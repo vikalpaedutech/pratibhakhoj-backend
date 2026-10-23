@@ -264,6 +264,7 @@ export const listVisits = asyncHandler(async (req, res) => {
 });
 
 export const exportVisits = asyncHandler(async (req, res) => {
+  req.setTimeout(0); res.setTimeout(0);
   const filter = buildVisitFilter(req);
   const visits = await populateVisits(SchoolVisit.find(filter).sort({ visitDate: 1, createdAt: 1 })).lean();
   const rows = await Promise.all(visits.map(reportRow));
@@ -349,6 +350,7 @@ export const saveVisitForm = asyncHandler(async (req, res) => {
 });
 
 export const downloadVisitPdf = asyncHandler(async (req, res) => {
+  req.setTimeout(0); res.setTimeout(0);
   const visit = await getVisit(req.params.id);
   if (String(visit.userId?._id || visit.userId) !== String(req.user._id)) throw new ApiError(403, "You can only download your own visit form");
   const pdf = await createVisitPdf({ visit });
@@ -357,6 +359,7 @@ export const downloadVisitPdf = asyncHandler(async (req, res) => {
 });
 
 export const downloadBlankVisitPdf = asyncHandler(async (_req, res) => {
+  res.setTimeout(0);
   const pdf = await fs.readFile(TEMPLATE_PATH);
   res.set({ "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=school-awareness-campaign-blank-template.pdf", "Content-Length": pdf.length });
   res.send(pdf);

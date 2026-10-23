@@ -617,8 +617,8 @@
 //     const title =
 //       examCode.includes("100") ||
 //       examCode.includes("HS")
-//         ? "Haryana Super 100 Level 1 Registration Slip (2027-29)"
-//         : "Mission Buniyaad Level 1 Registration Slip (2027-29)";
+//         ? "Haryana Super 100 Registration Slip (2027-29)"
+//         : "Mission Buniyaad Registration Slip (2027-29)";
 
 //     drawCenteredText(
 //       page,
@@ -1618,6 +1618,7 @@ export const createL1AcknowledgementSlip = async ({
   res = null,
   download = false,
 }) => {
+  if (res) res.setTimeout(0);
   /* -----------------------------------------------------
      LOAD DYNAMIC TEMPLATE
   ----------------------------------------------------- */
@@ -1730,8 +1731,8 @@ export const createL1AcknowledgementSlip = async ({
     examCode.includes("SUPER");
 
   const title = isSuper100
-    ? "Haryana Super 100 Level 1 Registration Slip (2027-29)"
-    : "Mission Buniyaad Level 1 Registration Slip (2027-29)";
+    ? "Haryana Super 100 Registration Slip (2027-29)"
+    : "Mission Buniyaad Registration Slip (2027-29)";
 
   drawCenteredText(page, title, {
     x: headerX,
@@ -1773,7 +1774,7 @@ export const createL1AcknowledgementSlip = async ({
     ""
   );
 
-  if (registrationRemark) {
+  if (registrationRemark && String(student?.verificationStatus || "").toLowerCase() === "rejected") {
     drawCenteredText(
       page,
       `Registration Remark: ${registrationRemark}`,

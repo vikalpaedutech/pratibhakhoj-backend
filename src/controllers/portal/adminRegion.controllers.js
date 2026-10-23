@@ -22,6 +22,7 @@ export const deactivateBlock=asyncHandler(async(req,res)=>{const x=await Block.f
 export const deactivateSchool=asyncHandler(async(req,res)=>{const x=await School.findByIdAndUpdate(req.params.id,{$set:{isActive:false}},{new:true});if(!x)throw new ApiError(404,"School not found");res.json(new ApiResponse(200,x,"School deactivated"));});
 
 export const regionTemplate = asyncHandler(async (_req,res)=>{
+ res.setTimeout(0);
  const ws=XLSX.utils.aoa_to_sheet([["districtName","districtId","blockName","blockId","schoolName","schoolCode"],["Example District","D-001","Example Block","B-001","Example School","S-001"]]);
  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Regions");
  const buffer=XLSX.write(wb,{type:"buffer",bookType:"xlsx"});

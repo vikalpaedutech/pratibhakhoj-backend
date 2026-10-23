@@ -19,13 +19,15 @@ import dashboardAccessRouter from "./routes/portal/dashboardAccess.routes.js";
 import permissionRouter from "./routes/portal/permission.routes.js";
 import schoolVisitRouter from "./routes/portal/schoolVisit.routes.js";
 import reportDashboardRouter from "./routes/portal/reportDashboard.routes.js";
+import examControllerRouter from "./routes/portal/examController.routes.js";
+import { readExamSettings } from "./controllers/portal/examController.controllers.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 
-const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:5174,http://localhost:5173, http://64.227.143.155:5174, https://testing.buniyaadhry.com")
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:5174,http://localhost:5173, http://64.227.143.155:5174, https://testing.buniyaadhry.com, https://registration.buniyaadhry.com")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
@@ -54,6 +56,21 @@ app.get("/api/v1/health", (_req, res) => {
     message: "PratibhaKhoj backend is healthy",
     data: { service: "pratibhakhoj", timestamp: new Date().toISOString() },
   });
+});
+
+app.use("/api/v1/exam-controller", examControllerRouter);
+
+// When the exam is inactive, keep authentication and the admin controller available
+// so an administrator can turn registrations back on. All operational APIs are paused.
+app.use("/api/v1", async (req, res, next) => {
+  try {
+    if (req.path.startsWith("/auth/") || req.path.startsWith("/exam-controller/")) return next();
+    const settings = await readExamSettings();
+    if (settings?.examActive === false) {
+      return res.status(503).json({ success: false, statusCode: 503, message: settings.landingMessage || "Registrations coming soon", data: null });
+    }
+    return next();
+  } catch (error) { return next(error); }
 });
 
 app.use("/api/v1/auth", authRouter);

@@ -138,8 +138,8 @@ const sanitize = (payload, examType, { bulk = false } = {}) => {
     fatherName: String(payload.fatherName || payload.father || "").trim(),
     motherName: cleanString(payload.motherName || payload.mother),
     dob: normalizeDob(payload.dob ?? payload["dob (dd-mm-yyyy)"]),
-    gender: cleanString(payload.gender),
-    category: cleanString(payload.category),
+    gender: (() => { const value = String(payload.gender ?? payload["gender (M/F/OTHER)"] ?? "").trim().toUpperCase(); return ({ M: "Boy", MALE: "Boy", F: "Girl", FEMALE: "Girl", OTHER: "Other", GIRL: "Girl", BOY: "Boy" })[value] || cleanString(payload.gender ?? payload["gender (M/F/OTHER)"]); })(),
+    category: (() => { const value = String(payload.category ?? payload["category (BC-A/BC-B/GEN/SC/OTHER)"] ?? "").trim().toUpperCase(); return ({ "BC-A": "BC-A", "BC-B": "BC-B", GEN: "General", GENERAL: "General", SC: "SC", OTHER: "Other" })[value] || cleanString(payload.category ?? payload["category (BC-A/BC-B/GEN/SC/OTHER)"]); })(),
     aadhar: cleanString(payload.aadhar),
     mobile: cleanString(payload.mobile),
     whatsapp: cleanString(payload.whatsapp),
@@ -1476,6 +1476,7 @@ const requireDashboardExportAccess = async (req, examType, view) => {
 };
 
 export const exportPublicLevel1Dashboard = asyncHandler(async (req, res) => {
+  req.setTimeout(0); res.setTimeout(0);
   const examType = getExam(req.params.examType).code;
   const view = String(req.query.view || "district-block");
   if (!["district-block", "block-school"].includes(view)) {
@@ -1636,6 +1637,7 @@ export const publicLevel1SchoolDashboard = asyncHandler(async (req, res) => {
 });
 
 export const downloadAcknowledgement = asyncHandler(async (req, res) => {
+  req.setTimeout(0); res.setTimeout(0);
   const student = await Student.findOne({
     slipId: req.params.slipId,
     isActive: true,
@@ -1662,6 +1664,7 @@ export const downloadAcknowledgement = asyncHandler(async (req, res) => {
 });
 
 export const bulkDownloadAcknowledgements = asyncHandler(async (req, res) => {
+  req.setTimeout(0); res.setTimeout(0);
   const ids = Array.isArray(req.body?.studentIds) ? req.body.studentIds.map(String).filter(Boolean) : [];
   const examType = req.body?.examType ? getExam(req.body.examType).code : null;
   const allRegistrations = req.body?.allRegistrations === true;
@@ -1712,6 +1715,7 @@ export const bulkDownloadAcknowledgements = asyncHandler(async (req, res) => {
 });
 
 export const generateBulkTemplate = asyncHandler(async (req, res) => {
+  req.setTimeout(0); res.setTimeout(0);
   const {
     districtId,
     blockId,
@@ -1756,10 +1760,9 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
     "name",
     "fatherName",
     "dob (dd-mm-yyyy)",
-    "gender",
-    "category",
+    "gender (M/F/OTHER)",
+    "category (BC-A/BC-B/GEN/SC/OTHER)",
     "mobile",
-    "houseNumber",
     "addressBlock",
     "addressDistrict",
     "districtName",
@@ -1776,10 +1779,9 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
       name: "",
       fatherName: "",
       "dob (dd-mm-yyyy)": "",
-      gender: "",
-      category: "",
+      "gender (M/F/OTHER)": "",
+      "category (BC-A/BC-B/GEN/SC/OTHER)": "",
       mobile: "",
-      houseNumber: "",
       addressBlock: "",
       addressDistrict: "",
       districtName: district.districtName,

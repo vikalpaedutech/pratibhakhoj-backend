@@ -27,17 +27,18 @@ export const createZip = (files) => {
   for (const file of files) {
     const name = Buffer.from(file.name, "utf8");
     const source = Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data);
-    const compressed = deflateRawSync(source, { level: 6 });
+    const method = /\.pdf$/i.test(file.name) ? 0 : 8;
+    const compressed = method === 0 ? source : deflateRawSync(source, { level: 6 });
     const checksum = crc32(source);
 
     const local = Buffer.concat([
-      u32(0x04034b50), u16(20), u16(0), u16(8), u16(0), u16(0),
+      u32(0x04034b50), u16(20), u16(0), u16(method), u16(0), u16(0),
       u32(checksum), u32(compressed.length), u32(source.length), u16(name.length), u16(0), name, compressed,
     ]);
     locals.push(local);
 
     const central = Buffer.concat([
-      u32(0x02014b50), u16(20), u16(20), u16(0), u16(8), u16(0), u16(0),
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(method), u16(0), u16(0),
       u32(checksum), u32(compressed.length), u32(source.length), u16(name.length), u16(0), u16(0), u16(0), u16(0),
       u32(0), u32(offset), name,
     ]);
