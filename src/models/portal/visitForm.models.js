@@ -35,6 +35,7 @@ const schema = new Schema({
   district: { type: String, default: "", trim: true },
   dateOfSLCVisit: { type: Date, default: null },
   centreCoordinator: { type: String, default: "", trim: true },
+  principalName: { type: String, default: "", trim: true },
   awarenessCampaignActivities: { type: [activitySchema], default: [] },
   studentRegistrationStatus: { type: [programmeStatusSchema], default: [] },
   pendingRegistrationFollowUp: { type: [pendingSchema], default: [] },

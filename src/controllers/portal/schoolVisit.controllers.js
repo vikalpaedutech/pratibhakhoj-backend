@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import path from "path";
 import fs from "fs/promises";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import XLSX from "xlsx";
 import { SchoolVisit } from "../../models/portal/schoolVisit.models.js";
@@ -17,14 +17,11 @@ import { uploadToSpaces, getSignedUrlForSpacesKey } from "../../utils/space.util
 import { isSchoolAccessible } from "../../services/portal/schoolVisitAccess.service.js";
 
 const ACTIVITIES = [
-  "Coordination with Principal / School Nodal Officer",
-  "Assembly / interaction with eligible students",
-  "Awareness session on Mission Buniyaad & Haryana Super 100",
-  "Screening of approved awareness videos",
-  "Display / sharing of campaign posters",
-  "Student queries and interaction",
-  "Awareness survey (FAQs) conducted",
-  "Registration",
+  "Coordination with School In-Charge",
+  "Screening of awareness videos",
+  "Timelines shared & Awareness survey conducted",
+  "Display of campaign posters on bulletin board",
+  "Student Registration",
 ];
 const PROGRAMMES = [
   { programme: "Mission Buniyaad", eligibleClass: "Class 8" },
@@ -42,7 +39,7 @@ const cleanNumber = (value) => value === "" || value === null || value === undef
 
 const normalizeForm = (form = {}) => ({
   schoolCampaign: {
-    centreCoordinator: String(form.schoolCampaign?.centreCoordinator || "").trim(),
+    principal: String(form.schoolCampaign?.principal || "").trim(),
   },
   activities: ACTIVITIES.map((activity, index) => ({
     activity,
@@ -87,7 +84,7 @@ const getVisit = async (id) => {
   if (!visit) throw new ApiError(404, "School visit not found");
   const form = await VisitForm.findOne({ schoolVisitId: visit._id }).lean();
   visit.form = form ? {
-    schoolCampaign: { centreCoordinator: form.centreCoordinator || "" },
+    schoolCampaign: { principal: form.principalName || "" },
     activities: form.awarenessCampaignActivities || [],
     studentRegistrationStatus: form.studentRegistrationStatus || [],
     pendingFollowUp: form.pendingRegistrationFollowUp || [],
@@ -96,91 +93,121 @@ const getVisit = async (id) => {
   return visit;
 };
 
-const TEMPLATE_PATH = path.join(process.cwd(), "public", "template", "slcTemplate.pdf");
+// The complete SLC template is the background. The header-only source is also
+// kept at the requested path for future layout changes / dynamic-only rendering.
+const TEMPLATE_PATH = path.join(process.cwd(), "public", "template", "slc-template-cc-only-header1.pdf");
+const HEADER_TEMPLATE_PATH = path.join(process.cwd(), "public", "template", "slc-template-cc-only-header1.pdf");
 const FONT_PATH = path.join(process.cwd(), "public", "fonts", "NotoSans-Regular.ttf");
 
 const formatDate = (value) => value ? new Date(value).toLocaleDateString("en-IN") : "";
 const textValue = (value) => value === null || value === undefined ? "" : String(value);
 
-const fitText = (font, value, size, maxWidth) => {
-  let text = textValue(value);
-  if (font.widthOfTextAtSize(text, size) <= maxWidth) return text;
-  while (text.length && font.widthOfTextAtSize(`${text}…`, size) > maxWidth) text = text.slice(0, -1);
-  return text ? `${text}…` : "";
+const wrapText = (font, value, size, maxWidth) => {
+  const words = textValue(value).replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    // Break a single oversized token safely rather than allowing it outside the cell.
+    let token = word;
+    while (font.widthOfTextAtSize(token, size) > maxWidth && token.length > 1) {
+      let cut = token.length;
+      while (cut > 1 && font.widthOfTextAtSize(token.slice(0, cut), size) > maxWidth) cut--;
+      if (line) { lines.push(line); line = ""; }
+      lines.push(token.slice(0, cut));
+      token = token.slice(cut);
+    }
+    const candidate = line ? `${line} ${token}` : token;
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) line = candidate;
+    else { if (line) lines.push(line); line = token; }
+  }
+  if (line) lines.push(line);
+  return lines;
 };
 
 const drawValue = (page, font, value, x, top, width, height, size = 7.5, align = "left") => {
-  const text = fitText(font, value, size, Math.max(4, width - 6));
+  const text = textValue(value).trim();
   if (!text) return;
+  const inset = 3;
+  const maxWidth = Math.max(4, width - inset * 2);
+  const lineHeight = size + 1.4;
+  // Fit the content inside the cell: wrap first, then reduce font if it needs
+  // more lines than the cell can safely display. Never draw beyond the cell.
+  const maxLines = Math.max(1, Math.floor((height - 3) / lineHeight));
+  let actualSize = size;
+  let lines = wrapText(font, text, actualSize, maxWidth);
+  while (lines.length > maxLines && actualSize > 5.2) {
+    actualSize -= 0.3;
+    lines = wrapText(font, text, actualSize, maxWidth);
+  }
+  if (lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    let last = lines[maxLines - 1] || "";
+    while (last && font.widthOfTextAtSize(`${last}…`, actualSize) > maxWidth) last = last.slice(0, -1);
+    lines[maxLines - 1] = last ? `${last}…` : "";
+  }
   const pageHeight = page.getHeight();
-  const textWidth = font.widthOfTextAtSize(text, size);
-  const tx = align === "center" ? x + Math.max(3, (width - textWidth) / 2) : x + 3;
-  const ty = pageHeight - top - height + Math.max(3, (height - size) / 2 + 1);
-  page.drawText(text, { x: tx, y: ty, size, font });
+  const totalHeight = lines.length * (actualSize + 1.2);
+  let baseline = pageHeight - top - Math.max(2, (height - totalHeight) / 2) - actualSize;
+  for (const line of lines) {
+    if (!line) continue;
+    const textWidth = font.widthOfTextAtSize(line, actualSize);
+    const tx = align === "center" ? x + Math.max(inset, (width - textWidth) / 2) : x + inset;
+    page.drawText(line, { x: tx, y: baseline, size: actualSize, font, maxWidth });
+    baseline -= actualSize + 1.2;
+  }
 };
 
 const createVisitPdf = async ({ visit, blank = false }) => {
   const bytes = await fs.readFile(TEMPLATE_PATH);
-  if (blank) return bytes;
-
   const pdfDoc = await PDFDocument.load(bytes);
   pdfDoc.registerFontkit(fontkit);
   const fontBytes = await fs.readFile(FONT_PATH);
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
-  const page = pdfDoc.getPages()[0];
-
-  // Coordinates are aligned to the supplied slcTemplate.pdf. Values are overlaid
-  // into the existing cells; the template itself is never re-drawn in code.
-  const school = visit?.schoolId?.schoolName || "";
-  const schoolCode = visit?.schoolId?.schoolCode || "";
-  const block = visit?.blockId?.blockName || "";
-  const district = visit?.districtId?.districtName || "";
-  const visitDate = formatDate(visit?.visitDate);
-  const coordinator = visit?.form?.schoolCampaign?.centreCoordinator || visit?.userId?.name || "";
-
-  // Section 1 value cells.
-  drawValue(page, font, school, 119.9, 142.7, 177.5, 13.8, 7.2);
-  drawValue(page, font, schoolCode, 426.3, 142.7, 128.9, 13.8, 7.2);
-  drawValue(page, font, block, 119.9, 156.5, 177.5, 13.8, 7.2);
-  drawValue(page, font, district, 426.3, 156.5, 128.9, 13.8, 7.2);
-  drawValue(page, font, visitDate, 119.9, 170.9, 177.5, 13.8, 7.2);
-  drawValue(page, font, coordinator, 426.3, 170.9, 128.9, 13.8, 7.2);
-
-  // Section 2 activity status + remarks.
-  const activities = visit?.form?.activities || [];
-  activities.slice(0, 8).forEach((item, index) => {
-    const top = 235.0 + index * 19.2;
-    drawValue(page, font, item.status, 345.3, top, 35.4, 19.2, 7.2, "center");
-    drawValue(page, font, item.remarks, 380.7, top, 176.3, 19.2, 6.5);
-  });
-
-  // Section 3 two programme rows.
-  const statuses = visit?.form?.studentRegistrationStatus || [];
-  statuses.slice(0, 2).forEach((item, index) => {
-    const top = 460.4 + index * 27.6;
-    const values = [
-      item.totalStudents, item.studentsAbove60, item.studentsBelow60,
-      item.studentsPresent, item.studentsAbsent, item.registrationsCompleted,
-      item.registrationsPending,
-    ];
-    const xs = [152.9, 199.6, 262.0, 326.1, 380.7, 431.7, 493.4];
-    const widths = [46.7, 62.4, 64.1, 54.6, 50.9, 61.8, 65.4];
-    values.forEach((value, i) => drawValue(page, font, value, xs[i], top, widths[i], 27.6, 7.2, "center"));
-  });
-
-  // Section 4 pending registration/follow-up.
-  const follow = visit?.form?.pendingFollowUp || [];
-  follow.slice(0, 2).forEach((item, index) => {
-    const top = 588.1 + index * 36.0;
-    drawValue(page, font, item.pendingRegistrations, 134.3, top, 109.1, 36, 7.2, "center");
-    drawValue(page, font, item.reasonRemarks, 243.4, top, 199.6, 36, 6.5);
-    drawValue(page, font, formatDate(item.committedDate), 443.0, top, 118.7, 36, 7.0, "center");
-  });
-
-  // Section 6 sign-off names (signature/stamp remain blank for printing/signing).
-  drawValue(page, font, visit?.form?.signOff?.centreCoordinatorName || "", 132, 738, 190, 18, 7.2);
-  drawValue(page, font, visit?.form?.signOff?.schoolHeadName || "", 470, 738, 88, 18, 7.2);
-
+  const page = pdfDoc.getPages()[0], W = page.getWidth(), H = page.getHeight();
+  const ink = rgb(0.12, 0.12, 0.12), blue = rgb(0.84, 0.91, 0.94);
+  const py = (top) => H - top;
+  const line = (x1,t1,x2,t2) => page.drawLine({start:{x:x1,y:py(t1)},end:{x:x2,y:py(t2)},thickness:0.45,color:ink});
+  const box = (x,t,w,h,fill=null) => page.drawRectangle({x,y:H-t-h,width:w,height:h,borderColor:ink,borderWidth:0.45,...(fill?{color:fill}:{})});
+  const txt = (v,x,t,w,h,size=6.5,align="left") => {
+    const s=textValue(v).replace(/\\s+/g," ").trim(); if(!s)return;
+    let fs=size, lines=wrapText(font,s,fs,Math.max(4,w-6)), max=Math.max(1,Math.floor((h-4)/(fs+1.2)));
+    while(lines.length>max && fs>5){fs-=0.3;lines=wrapText(font,s,fs,Math.max(4,w-6));}
+    lines=lines.slice(0,max); let base=H-t-Math.max(2,(h-lines.length*(fs+1.2))/2)-fs;
+    for(const ln of lines){const tw=font.widthOfTextAtSize(ln,fs);page.drawText(ln,{x:align==="center"?x+Math.max(3,(w-tw)/2):x+3,y:base,size:fs,font,color:ink,maxWidth:Math.max(4,w-6)});base-=fs+1.2;}
+  };
+  const cell=(x,t,w,h,v="",fill=null,size=6.5,align="left")=>{box(x,t,w,h,fill);txt(v,x,t,w,h,size,align);};
+  const pair=(x,t,lbl,val,lw,vw)=>{cell(x,t,lw,14,lbl,blue,6.2);cell(x+lw,t,vw,14,val,null,6.5);};
+  box(11,11,W-22,H-22);
+  const school=visit?.schoolId?.schoolName||"", code=visit?.schoolId?.schoolCode||"";
+  const block=visit?.blockId?.blockName||"", district=visit?.districtId?.districtName||"";
+  const date=formatDate(visit?.visitDate), principal=visit?.form?.schoolCampaign?.principal||"";
+  txt("1. SCHOOL CAMPAIGN DETAILS",35,143,300,13,8);
+  const x=36, y0=157, a=68,b=201,d=73,e=177;
+  pair(x,y0,"District",district,a,b); pair(x+a+b,y0,"Date",date,d,e);
+  pair(x,y0+14,"Block",block,a,b); pair(x+a+b,y0+14,"Principal",principal,d,e);
+  pair(x,y0+28,"School Name",school,a,b); pair(x+a+b,y0+28,"School Code",code,d,e);
+  txt("2. AWARENESS CAMPAIGN ACTIVITIES",35,207,350,13,8);
+  const acts=visit?.form?.activities||[], ax=36, at=220, ac=[35,207,70,210];
+  ["S. No.","Activity","Status (Yes/No)","Remarks"].forEach((v,i)=>{const xx=ax+ac.slice(0,i).reduce((s,n)=>s+n,0);cell(xx,at,ac[i],15,v,blue,6.2,"center");});
+  ACTIVITIES.forEach((v,i)=>{const t=at+15+i*20, r=acts[i]||{}; let xx=ax; [String(i+1),v,r.status||"",r.remarks||""].forEach((val,j)=>{cell(xx,t,ac[j],20,val,null,j===1?6.1:6.5,j===0||j===2?"center":"left");xx+=ac[j];});});
+  txt("3. STUDENT REGISTRATION STATUS",35,343,350,13,8);
+  const sx=36, st=356, sc=[67,49,51,55,65,66,75,94];
+  const sh=["Programme","Class","Total Students","Students Present","Registered Students Above 60%","Registered Students Below 60%","Total Registrations Completed","Registrations Pending"];
+  let xx=sx; sh.forEach((v,i)=>{cell(xx,st,sc[i],33,v,blue,5.7,"center");xx+=sc[i];});
+  const stats=visit?.form?.studentRegistrationStatus||[];
+  PROGRAMMES.forEach((p,i)=>{const r=stats[i]||{}, vals=[p.programme,p.eligibleClass,r.totalStudents??"",r.studentsPresent??"",r.studentsAbove60??"",r.studentsBelow60??"",r.registrationsCompleted??"",r.registrationsPending??""];xx=sx;vals.forEach((v,j)=>{cell(xx,st+33+i*27,sc[j],27,v,null,j<2?6.1:6.4,j<2?"left":"center");xx+=sc[j];});});
+  txt("4. PENDING REGISTRATION & FOLLOW-UP",35,449,360,13,8);
+  const fx=36, ft=462, fc=[98,110,220,94], fh=["Programme","Pending Registrations","Reason / Remarks","Committed Date for Completion"];
+  xx=fx;fh.forEach((v,i)=>{cell(xx,ft,fc[i],32,v,blue,6.0,"center");xx+=fc[i];});
+  const follow=visit?.form?.pendingFollowUp||[];
+  PROGRAMMES.forEach((p,i)=>{const r=follow[i]||{},vals=[p.programme,r.pendingRegistrations??"",r.reasonRemarks||"",formatDate(r.committedDate)];xx=fx;vals.forEach((v,j)=>{cell(xx,ft+32+i*34,fc[j],34,v,null,6.2,j===1||j===3?"center":"left");xx+=fc[j];});});
+  txt("6. SIGN-OFF & SUBMISSION",35,603,300,13,8);
+  txt("Block Campaign Incharge Name:",36,642,190,14,6.7); line(143,654,255,654);
+  txt("School In-Charge Name:",355,642,190,14,6.7); line(438,654,550,654);
+  txt("Signature:",36,671,70,14,6.7); line(78,683,180,683);
+  txt("Signature:",355,671,70,14,6.7); line(397,683,490,683);
+  txt("Stamp:",355,700,70,14,6.7); line(390,712,490,712);
   return pdfDoc.save();
 };
 
@@ -218,7 +245,7 @@ const reportRow = async (visit) => {
     "School Code": visit.schoolId?.schoolCode || "",
     "Block": visit.blockId?.blockName || "",
     "District": visit.districtId?.districtName || "",
-    "Centre Coordinator": visit.form?.schoolCampaign?.centreCoordinator || visit.userId?.name || "",
+    "Principal": visit.form?.schoolCampaign?.principal || "",
     "Description": visit.description || "",
   };
   activities.slice(0, 8).forEach((a, i) => {
@@ -233,7 +260,6 @@ const reportRow = async (visit) => {
     row[`${prefix} Students Above 60%`] = s.studentsAbove60 ?? "";
     row[`${prefix} Students Below 60%`] = s.studentsBelow60 ?? "";
     row[`${prefix} Students Present`] = s.studentsPresent ?? "";
-    row[`${prefix} Students Absent`] = s.studentsAbsent ?? "";
     row[`${prefix} Registrations Completed`] = s.registrationsCompleted ?? "";
     row[`${prefix} Registrations Pending`] = s.registrationsPending ?? "";
     const f = follow[i] || {};
@@ -241,8 +267,8 @@ const reportRow = async (visit) => {
     row[`${prefix} Reason / Remarks`] = f.reasonRemarks || "";
     row[`${prefix} Committed Date for Completion`] = formatDate(f.committedDate);
   });
-  row["Centre Coordinator Name"] = visit.form?.signOff?.centreCoordinatorName || "";
-  row["School Head Name"] = visit.form?.signOff?.schoolHeadName || "";
+  row["Block Campaign Incharge Name"] = visit.form?.signOff?.centreCoordinatorName || "";
+  row["School In-Charge Name"] = visit.form?.signOff?.schoolHeadName || "";
   row["Attachment"] = "";
   if (visit.attachment?.key) row.__attachmentUrl = await getSignedUrlForSpacesKey(visit.attachment.key, 7 * 24 * 60 * 60);
   return row;
@@ -335,7 +361,7 @@ export const saveVisitForm = asyncHandler(async (req, res) => {
         block: visit.blockId?.blockName || "",
         district: visit.districtId?.districtName || "",
         dateOfSLCVisit: visit.visitDate,
-        centreCoordinator: normalized.schoolCampaign.centreCoordinator,
+        principalName: normalized.schoolCampaign.principal,
         awarenessCampaignActivities: normalized.activities,
         studentRegistrationStatus: normalized.studentRegistrationStatus,
         pendingRegistrationFollowUp: normalized.pendingFollowUp,
@@ -360,7 +386,7 @@ export const downloadVisitPdf = asyncHandler(async (req, res) => {
 
 export const downloadBlankVisitPdf = asyncHandler(async (_req, res) => {
   res.setTimeout(0);
-  const pdf = await fs.readFile(TEMPLATE_PATH);
+  const pdf = await createVisitPdf({ blank: true });
   res.set({ "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=school-awareness-campaign-blank-template.pdf", "Content-Length": pdf.length });
   res.send(pdf);
 });

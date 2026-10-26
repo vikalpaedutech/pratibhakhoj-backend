@@ -139,14 +139,14 @@ const sanitize = (payload, examType, { bulk = false } = {}) => {
     motherName: cleanString(payload.motherName || payload.mother),
     dob: normalizeDob(payload.dob ?? payload["dob (dd-mm-yyyy)"]),
     gender: (() => { const value = String(payload.gender ?? payload["gender (M/F/OTHER)"] ?? "").trim().toUpperCase(); return ({ M: "Boy", MALE: "Boy", F: "Girl", FEMALE: "Girl", OTHER: "Other", GIRL: "Girl", BOY: "Boy" })[value] || cleanString(payload.gender ?? payload["gender (M/F/OTHER)"]); })(),
-    category: (() => { const value = String(payload.category ?? payload["category (BC-A/BC-B/GEN/SC/OTHER)"] ?? "").trim().toUpperCase(); return ({ "BC-A": "BC-A", "BC-B": "BC-B", GEN: "General", GENERAL: "General", SC: "SC", OTHER: "Other" })[value] || cleanString(payload.category ?? payload["category (BC-A/BC-B/GEN/SC/OTHER)"]); })(),
+    category: (() => { const value = String(payload.category ?? payload["category (BCA/BCB/GEN/SC/ST/OTHER)"] ?? "").trim().toUpperCase(); return ({ "BC-A": "BCA", BCA: "BCA", "BC-B": "BCB", BCB: "BCB", GEN: "General", GENERAL: "General", BCA: "BCA", BCB: "BCB", SC: "SC", ST: "ST", OTHER: "Other" })[value] || cleanString(payload.category ?? payload["category (BCA/BCB/GEN/SC/ST/OTHER)"]); })(),
     aadhar: cleanString(payload.aadhar),
     mobile: cleanString(payload.mobile),
     whatsapp: cleanString(payload.whatsapp),
     houseNumber: cleanString(payload.houseNumber),
     cityTownVillage: cleanString(payload.cityTownVillage),
-    addressBlock: cleanString(payload.addressBlock),
-    addressDistrict: cleanString(payload.addressDistrict),
+    addressBlock: bulk ? null : cleanString(payload.addressBlock),
+    addressDistrict: bulk ? null : cleanString(payload.addressDistrict),
     addressState: bulk ? null : "Haryana",
 
     districtId: payload.districtId || null,
@@ -979,8 +979,6 @@ export const updateOfficialStudent = asyncHandler(async (req, res) => {
     "whatsapp",
     "houseNumber",
     "cityTownVillage",
-    "addressBlock",
-    "addressDistrict",
     "addressState",
     "districtId",
     "blockDistrictId",
@@ -1723,7 +1721,7 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
     schoolEntry = "db",
     schoolNameManual = "",
     classOfStudent,
-    count = 10,
+    count,
   } = req.body;
 
   if (!districtId || !blockId || !classOfStudent) {
@@ -1731,6 +1729,7 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
   }
 
   if (!schoolDistrictId) throw new ApiError(400, "School is required");
+  if (!Number.isInteger(Number(count)) || Number(count) < 1 || Number(count) > 500) throw new ApiError(400, "No. of students must be between 1 and 500");
 
   const district = await District.findOne({ _id: districtId, isActive: true }).lean();
   const block = await Block.findOne({ _id: blockId, districtId, isActive: true }).lean();
@@ -1761,10 +1760,8 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
     "fatherName",
     "dob (dd-mm-yyyy)",
     "gender (M/F/OTHER)",
-    "category (BC-A/BC-B/GEN/SC/OTHER)",
+    "category (BCA/BCB/GEN/SC/ST/OTHER)",
     "mobile",
-    "addressBlock",
-    "addressDistrict",
     "districtName",
     "blockName",
     "schoolName",
@@ -1773,17 +1770,15 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
   ];
 
   const rows = Array.from(
-    { length: Math.min(Math.max(Number(count) || 10, 1), 500) },
+    { length: Math.min(Math.max(Number(count), 1), 500) },
     () => ({
       studentSrn: "",
       name: "",
       fatherName: "",
       "dob (dd-mm-yyyy)": "",
       "gender (M/F/OTHER)": "",
-      "category (BC-A/BC-B/GEN/SC/OTHER)": "",
+      "category (BCA/BCB/GEN/SC/ST/OTHER)": "",
       mobile: "",
-      addressBlock: "",
-      addressDistrict: "",
       districtName: district.districtName,
       blockName: block.blockName,
       schoolName: school.schoolName,
@@ -1880,7 +1875,7 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
       });
       created.push({ row: index + 2, id: student._id, slipId: student.slipId });
     } catch (error) {
-      errors.push({ row: index + 2, message: error.message });
+      errors.push({ row: index + 2, message: error.message, data: rows[index] });
     }
   }
 
