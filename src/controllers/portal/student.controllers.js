@@ -1754,36 +1754,38 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
 
   await ensurePayloadInRegion(req.user._id, payload);
 
+  // Keep the workbook's visible labels user-friendly. Upload processing below
+  // maps these labels back to the existing internal field names.
   const templateColumns = [
-    "studentSrn",
-    "name",
-    "fatherName",
-    "dob (dd-mm-yyyy)",
-    "gender (M/F/OTHER)",
-    "category (BCA/BCB/GEN/SC/ST/OTHER)",
-    "mobile",
-    "districtName",
-    "blockName",
-    "schoolName",
-    "previousClassAnnualExamPercentage",
-    "class",
+    "SRN",
+    "Name",
+    "Father",
+    "D.O.B (dd-mm-yyyy)",
+    "Gender (M/F/OTHER)",
+    "Category (BCA/BCB/GEN/SC/ST/OTHER)",
+    "Mobile",
+    "District",
+    "Block",
+    "School",
+    "Previous Class Annual Exam Percentage",
+    "Class",
   ];
 
   const rows = Array.from(
     { length: Math.min(Math.max(Number(count), 1), 500) },
     () => ({
-      studentSrn: "",
-      name: "",
-      fatherName: "",
-      "dob (dd-mm-yyyy)": "",
-      "gender (M/F/OTHER)": "",
-      "category (BCA/BCB/GEN/SC/ST/OTHER)": "",
-      mobile: "",
-      districtName: district.districtName,
-      blockName: block.blockName,
-      schoolName: school.schoolName,
-      previousClassAnnualExamPercentage: "",
-      class: Number(classOfStudent),
+      SRN: "",
+      Name: "",
+      Father: "",
+      "D.O.B (dd-mm-yyyy)": "",
+      "Gender (M/F/OTHER)": "",
+      "Category (BCA/BCB/GEN/SC/ST/OTHER)": "",
+      Mobile: "",
+      District: district.districtName,
+      Block: block.blockName,
+      School: school.schoolName,
+      "Previous Class Annual Exam Percentage": "",
+      Class: Number(classOfStudent),
     })
   );
 
@@ -1803,7 +1805,27 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
 
   const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const uploadedRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  // Accept the renamed template headers while preserving compatibility with
+  // older templates and the existing validation/database field names.
+  const headerAliases = {
+    SRN: "studentSrn",
+    Name: "name",
+    Father: "fatherName",
+    "D.O.B (dd-mm-yyyy)": "dob (dd-mm-yyyy)",
+    "Gender (M/F/OTHER)": "gender (M/F/OTHER)",
+    "Category (BCA/BCB/GEN/SC/ST/OTHER)": "category (BCA/BCB/GEN/SC/ST/OTHER)",
+    Mobile: "mobile",
+    District: "districtName",
+    Block: "blockName",
+    School: "schoolName",
+    "Previous Class Annual Exam Percentage": "previousClassAnnualExamPercentage",
+    Class: "class",
+  };
+  const rows = uploadedRows.map((row) => Object.entries(row).reduce((normalized, [header, value]) => {
+    normalized[headerAliases[header] || header] = value;
+    return normalized;
+  }, {}));
   const examType = getExam(req.body.examType).code;
   const created = [];
   const updated = [];

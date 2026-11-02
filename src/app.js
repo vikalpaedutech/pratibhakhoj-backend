@@ -20,6 +20,7 @@ import permissionRouter from "./routes/portal/permission.routes.js";
 import schoolVisitRouter from "./routes/portal/schoolVisit.routes.js";
 import reportDashboardRouter from "./routes/portal/reportDashboard.routes.js";
 import examControllerRouter from "./routes/portal/examController.routes.js";
+import examinationCenterRouter from "./routes/portal/examinationCenter.routes.js";
 import { readExamSettings } from "./controllers/portal/examController.controllers.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -76,6 +77,7 @@ app.use("/api/v1", async (req, res, next) => {
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/regions", regionRouter);
 app.use("/api/v1/schools", schoolRouter);
+app.use("/api/v1/examination-centers", examinationCenterRouter);
 app.use("/api/v1/students", studentRouter);
 app.use("/api/v1/verification-users", verificationUserRouter);
 app.use("/api/v1/admin/users", adminUserRouter);

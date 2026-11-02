@@ -155,6 +155,13 @@ export const seedPermissions = async () => {
       description: "Allows authorised users to create, complete and upload school visit records.",
       isActive: true,
     },
+    {
+      code: "SCHOOL_CENTER_PREFERENCE",
+      name: "School Center Preference",
+      module: "Examination Management",
+      description: "Allows authorised users to assign schools to examination centers.",
+      isActive: true,
+    },
   ];
 
   for (const permission of permissions) {
