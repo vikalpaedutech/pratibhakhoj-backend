@@ -162,7 +162,9 @@ const sanitize = (payload, examType, { bulk = false } = {}) => {
         ? null
         : Number(payload.previousClassAnnualExamPercentage),
 
-    classOfStudent: exam.classOfStudent,
+    // For bulk uploads, the Class column in the uploaded template is the source of truth.
+    // Non-bulk registration continues to use the examination configuration.
+    classOfStudent: bulk ? Number(payload.class) : exam.classOfStudent,
   };
 };
 
@@ -197,6 +199,10 @@ const validateStudent = async (data, examType, { bulk = false } = {}) => {
 
   if (data.aadhar && !/^\d{12}$/.test(data.aadhar)) {
     throw new ApiError(400, "Aadhar must be exactly 12 digits");
+  }
+
+  if (![8, 10].includes(Number(data.classOfStudent))) {
+    throw new ApiError(400, "Class in the uploaded template must be either 8 or 10");
   }
 
   if (data.previousClassAnnualExamPercentage !== null) {

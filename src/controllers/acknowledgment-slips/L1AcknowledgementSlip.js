@@ -699,7 +699,7 @@
 //     ) {
 //       drawCenteredText(
 //         page,
-//         `Registration Remark: ${registrationRemark}`,
+//         `Rejection Reason: ${registrationRemark}`,
 //         {
 //           x:
 //             headerX,
@@ -1587,10 +1587,12 @@ const drawTableCell = (
     startY =
       y + height - paddingY - fontSize;
   } else {
+    // Position the first line from the top of the content block.
+    // Subsequent lines are drawn downward, so this keeps every
+    // wrapped line inside the dynamically sized table cell.
     startY =
       y +
-      (height - contentHeight) / 2 +
-      lineHeight -
+      (height + contentHeight) / 2 -
       fontSize;
   }
 
@@ -1749,9 +1751,12 @@ export const createL1AcknowledgementSlip = async ({
 
   const status = getStatus(student);
 
+  const statusLabel =
+    status === "Verified" ? "Registration Successful" : status;
+
   drawCenteredText(
     page,
-    `Registration Status: ${status}`,
+    `Registration Status: ${statusLabel}`,
     {
       x: headerX,
       y: pageHeight - 78,
@@ -1878,7 +1883,7 @@ export const createL1AcknowledgementSlip = async ({
   ----------------------------------------------------- */
 
   const tableX = 48;
-  const tableTop = pageHeight - 122;
+  const tableTop = pageHeight - 110;
 
   const labelWidth = 130;
   const tableWidth = 320;

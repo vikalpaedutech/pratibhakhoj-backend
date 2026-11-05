@@ -6,9 +6,7 @@ import connectDb from "./db/index.js";
 import { seedData } from "./services/portal/seed.service.js";
 import { db } from "./db/index.js";
 
-const port = Number(process.env.PORT || 8080 );
-
-//8200
+const port = Number(process.env.PORT || 8200);
 
 const startServer = async () => {
   try {
@@ -20,8 +18,8 @@ const startServer = async () => {
     }
     await seedData();
 
-    app.listen(port,"0.0.0.0", () => {
-      console.log(`PratibhaKhoj backend running at ${port}`);
+    app.listen(port, () => {
+      console.log(`PratibhaKhoj backend running at http://localhost:${port}`);
     });
   } catch (error) {
     console.error("Startup failed:", error);
