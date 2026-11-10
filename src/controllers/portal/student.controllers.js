@@ -1727,6 +1727,7 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
     schoolEntry = "db",
     schoolNameManual = "",
     classOfStudent,
+    examType,
     count,
   } = req.body;
 
@@ -1773,7 +1774,7 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
     "District",
     "Block",
     "School",
-    "Previous Class Annual Exam Percentage",
+    `Previous Class Annual Exam Percentage (class ${String(examType).toUpperCase() === "HS100" ? "09th" : "07th"})`,
     "Class",
   ];
 
@@ -1790,7 +1791,7 @@ export const generateBulkTemplate = asyncHandler(async (req, res) => {
       District: district.districtName,
       Block: block.blockName,
       School: school.schoolName,
-      "Previous Class Annual Exam Percentage": "",
+      [templateColumns[10]]: "",
       Class: Number(classOfStudent),
     })
   );
@@ -1826,6 +1827,8 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
     Block: "blockName",
     School: "schoolName",
     "Previous Class Annual Exam Percentage": "previousClassAnnualExamPercentage",
+    "Previous Class Annual Exam Percentage (class 09th)": "previousClassAnnualExamPercentage",
+    "Previous Class Annual Exam Percentage (class 0th)": "previousClassAnnualExamPercentage",
     Class: "class",
   };
   const rows = uploadedRows.map((row) => Object.entries(row).reduce((normalized, [header, value]) => {
