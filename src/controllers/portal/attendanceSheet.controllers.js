@@ -5,6 +5,7 @@ import { School } from "../../models/portal/school.models.js";
 import { District } from "../../models/portal/district.models.js";
 import { ApiError } from "../../utils/api-error.js";
 import { asyncHandler } from "../../utils/async-handler.js";
+import { createZip } from "../../utils/zip.utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -128,16 +129,7 @@ export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
   });
 
   const brandingDir = path.resolve(__dirname, "../../../public/branding");
-  const doc = new PDFDocument({ size: "A4", margins: { top: 24, bottom: 30, left: 42, right: 42 }, autoFirstPage: true, bufferPages: false });
-  const fileName = `attendance-sheet-${district.districtName.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.pdf`;
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-  doc.pipe(res);
-
-  let currentBlock = "";
-  let y = 0;
   const rowHeight = 29;
-  const totalWidth = middleOnly ? 523 : 523;
   const groups = new Map();
   for (const school of schools) {
     const blockName = school.blockId?.blockName || "Other";
@@ -145,56 +137,105 @@ export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
     groups.get(blockName).push(school);
   }
 
-  drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
-  const drawBlockHeading = (blockName, separateBlock = true) => {
-    // Keep each block's heading visually detached from the previous block's table.
-    const blockGap = separateBlock ? 14 : 0;
-    if (doc.y + blockGap + 22 + 28 + rowHeight * 2 > doc.page.height - 35) {
-      doc.addPage();
-      drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
-    } else if (blockGap) {
-      doc.y += blockGap;
-    }
-    const widths = doc._tableWidths;
-    const total = widths.reduce((a, b) => a + b, 0);
-    doc.rect(doc._tableX, doc.y, total, 22).fillAndStroke("#e5edf5", "#222");
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#111")
-      .text(blockName.toUpperCase(), doc._tableX + 2, doc.y + 6, { width: total - 4, align: "center" });
-    doc.y += 22;
-    drawTableHeader(doc);
-  };
-
+  const pdfFiles = [];
   for (const [blockName, blockSchools] of groups) {
-    currentBlock = blockName;
-    let schoolNumber = 0; // Serial numbers restart from 1 for every block.
-    drawBlockHeading(currentBlock, true);
-    for (const school of blockSchools) {
-      if (doc.y + rowHeight * 2 > doc.page.height - 35) {
-        doc.addPage();
-        drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
-        drawBlockHeading(currentBlock, false);
-      }
-      schoolNumber += 1;
-      const x0 = doc._tableX;
-      const widths = doc._tableWidths;
-      const y0 = doc.y;
-      const h = rowHeight * 2;
-      let x = x0;
-      widths.forEach((width, i) => {
-        doc.rect(x, y0, width, h).stroke("#222");
-        x += width;
-      });
-      doc.moveTo(x0 + widths[0] + widths[1], y0 + rowHeight)
-        .lineTo(x0 + widths.reduce((a, b) => a + b, 0), y0 + rowHeight).stroke("#222");
-      doc.font("Helvetica").fontSize(8).fillColor("#111")
-        .text(String(schoolNumber), x0 + 2, y0 + 23, { width: widths[0] - 4, align: "center" });
-      doc.font("Helvetica").fontSize(7.5)
-        .text(school.schoolName || "", x0 + widths[0] + 4, y0 + 24, {
-          width: widths[1] - 8, height: h - 8, align: "left", valign: "center", ellipsis: true,
+    const doc = new PDFDocument({
+      size: "A4",
+      margins: { top: 24, bottom: 30, left: 42, right: 42 },
+      autoFirstPage: true,
+      bufferPages: false,
+    });
+
+    const pdfBuffer = await new Promise((resolve, reject) => {
+      const chunks = [];
+      doc.on("data", (chunk) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+
+      const drawBlockHeading = (addGap = true) => {
+        const blockGap = addGap ? 14 : 0;
+        if (doc.y + blockGap + 22 + 28 + rowHeight * 2 > doc.page.height - 35) {
+          doc.addPage();
+          drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
+        } else if (blockGap) {
+          doc.y += blockGap;
+        }
+
+        const widths = doc._tableWidths;
+        const total = widths.reduce((a, b) => a + b, 0);
+        doc.rect(doc._tableX, doc.y, total, 22).fillAndStroke("#e5edf5", "#222");
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#111")
+          .text(blockName.toUpperCase(), doc._tableX + 2, doc.y + 6, {
+            width: total - 4,
+            align: "center",
+          });
+        doc.y += 22;
+        drawTableHeader(doc);
+      };
+
+      drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
+      drawBlockHeading(true);
+
+      let schoolNumber = 0;
+      for (const school of blockSchools) {
+        if (doc.y + rowHeight * 2 > doc.page.height - 35) {
+          doc.addPage();
+          drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
+          drawBlockHeading(false);
+        }
+
+        schoolNumber += 1;
+        const x0 = doc._tableX;
+        const widths = doc._tableWidths;
+        const y0 = doc.y;
+        const h = rowHeight * 2;
+        let x = x0;
+        widths.forEach((width) => {
+          doc.rect(x, y0, width, h).stroke("#222");
+          x += width;
         });
-      doc.y = y0 + h;
-    }
+        doc.moveTo(x0 + widths[0] + widths[1], y0 + rowHeight)
+          .lineTo(x0 + widths.reduce((a, b) => a + b, 0), y0 + rowHeight)
+          .stroke();
+        doc.font("Helvetica").fontSize(8).fillColor("#111")
+          .text(String(schoolNumber), x0 + 2, y0 + 23, {
+            width: widths[0] - 4,
+            align: "center",
+          });
+        doc.font("Helvetica").fontSize(7.5)
+          .text(school.schoolName || "", x0 + widths[0] + 4, y0 + 24, {
+            width: widths[1] - 8,
+            height: h - 8,
+            align: "left",
+            valign: "center",
+            ellipsis: true,
+          });
+        doc.y = y0 + h;
+      }
+
+      doc.end();
+    });
+
+    const safeBlockName = blockName
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase() || "other";
+    pdfFiles.push({
+      name: `${String(pdfFiles.length + 1).padStart(2, "0")}-${safeBlockName}.pdf`,
+      data: pdfBuffer,
+    });
   }
 
-  doc.end();
+  const zipBuffer = createZip(pdfFiles);
+  const districtSlug = district.districtName
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="attendance-sheets-${districtSlug}.zip"`
+  );
+  res.setHeader("Content-Length", zipBuffer.length);
+  res.send(zipBuffer);
 });
