@@ -22,7 +22,7 @@ export const listSchools = asyncHandler(async (req, res) => {
 });
 
 export const createSchool = asyncHandler(async (req, res) => {
-  const { schoolCode, schoolName, districtId, blockId } = req.body;
+  const { schoolCode, schoolName, schoolType, districtId, blockId } = req.body;
 
   if (!schoolName || !districtId || !blockId) {
     throw new ApiError(400, "schoolName, districtId and blockId are required");
@@ -40,6 +40,7 @@ export const createSchool = asyncHandler(async (req, res) => {
   const school = await School.create({
     schoolCode: schoolCode?.trim() || null,
     schoolName: schoolName.trim(),
+    schoolType: schoolType?.trim() || null,
     districtId,
     blockId,
   });
@@ -48,7 +49,7 @@ export const createSchool = asyncHandler(async (req, res) => {
 });
 
 export const updateSchool = asyncHandler(async (req, res) => {
-  const allowed = ["schoolCode", "schoolName", "districtId", "blockId", "isActive"];
+  const allowed = ["schoolCode", "schoolName", "schoolType", "districtId", "blockId", "isActive"];
   const update = Object.fromEntries(
     Object.entries(req.body).filter(([key]) => allowed.includes(key))
   );

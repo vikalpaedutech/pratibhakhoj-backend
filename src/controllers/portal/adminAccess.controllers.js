@@ -11,17 +11,28 @@ export const getUserAccess=asyncHandler(async(req,res)=>{
  res.json(new ApiResponse(200,rows,"User region access fetched"));
 });
 export const replaceUserAccess=asyncHandler(async(req,res)=>{
- const {scope,regions=[]}=req.body;
- if(!["global","district","block","school"].includes(scope)) throw new ApiError(400,"Invalid scope");
- await UserRegionAccess.deleteMany({userId:req.params.userId});
- if(scope==="global"){await UserRegionAccess.create({userId:req.params.userId,scope});}
- else {
-  for(const r of regions){
-   if(scope==="district" && !await District.exists({_id:r.districtId,isActive:true})) throw new ApiError(400,"Invalid district");
-   if(scope==="block" && !await Block.exists({_id:r.blockId,districtId:r.districtId,isActive:true})) throw new ApiError(400,"Invalid block");
-   if(scope==="school" && !await School.exists({_id:r.schoolId,districtId:r.districtId,blockId:r.blockId,isActive:true})) throw new ApiError(400,"Invalid school");
-   await UserRegionAccess.create({userId:req.params.userId,scope,districtId:r.districtId||null,blockId:r.blockId||null,schoolId:r.schoolId||null});
+ let {regions=[]}=req.body;
+ if(req.body.scope === "global") regions = [{scope:"global"}];
+ else if(req.body.scope && Array.isArray(regions) && regions.every(r => !r.scope)) regions = regions.map(r => ({...r,scope:req.body.scope}));
+ if(!Array.isArray(regions)) throw new ApiError(400,"regions must be an array");
+ const normalized=[];
+ for(const r of regions){
+  const scope=r.scope;
+  if(scope === "global") { normalized.length = 0; normalized.push({scope:"global",districtId:null,blockId:null,schoolId:null}); break; }
+  if(!["district","block","school"].includes(scope)) throw new ApiError(400,"Invalid region scope");
+  if(scope==="district"){
+   if(!r.districtId || !await District.exists({_id:r.districtId,isActive:true})) throw new ApiError(400,"Invalid district");
+   normalized.push({scope,districtId:r.districtId,blockId:null,schoolId:null});
+  } else if(scope==="block"){
+   if(!r.districtId || !r.blockId || !await Block.exists({_id:r.blockId,districtId:r.districtId,isActive:true})) throw new ApiError(400,"Invalid block");
+   normalized.push({scope,districtId:r.districtId,blockId:r.blockId,schoolId:null});
+  } else {
+   if(!r.districtId || !r.blockId || !r.schoolId || !await School.exists({_id:r.schoolId,districtId:r.districtId,blockId:r.blockId,isActive:true})) throw new ApiError(400,"Invalid school");
+   normalized.push({scope,districtId:r.districtId,blockId:r.blockId,schoolId:r.schoolId});
   }
  }
- res.json(new ApiResponse(200,await UserRegionAccess.find({userId:req.params.userId}).lean(),"Region access updated"));
+ await UserRegionAccess.deleteMany({userId:req.params.userId});
+ if(normalized.length) await UserRegionAccess.insertMany(normalized.map(row=>({userId:req.params.userId,...row})),{ordered:true});
+ const rows=await UserRegionAccess.find({userId:req.params.userId}).populate("districtId","districtName").populate("blockId","blockName").populate("schoolId","schoolName").lean();
+ res.json(new ApiResponse(200,rows,"Region access updated"));
 });

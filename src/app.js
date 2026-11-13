@@ -22,6 +22,7 @@ import reportDashboardRouter from "./routes/portal/reportDashboard.routes.js";
 import examControllerRouter from "./routes/portal/examController.routes.js";
 import examinationCenterRouter from "./routes/portal/examinationCenter.routes.js";
 import { readExamSettings } from "./controllers/portal/examController.controllers.js";
+import attendanceSheetRouter from "./routes/portal/attendanceSheet.routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +61,7 @@ app.get("/api/v1/health", (_req, res) => {
 });
 
 app.use("/api/v1/exam-controller", examControllerRouter);
+app.use("/api/v1/attendance-sheet-dlc", attendanceSheetRouter);
 
 // When the exam is inactive, keep authentication and the admin controller available
 // so an administrator can turn registrations back on. All operational APIs are paused.

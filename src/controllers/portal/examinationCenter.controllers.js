@@ -18,8 +18,8 @@ const centerPayload = async (body) => {
     districtName: district.districtName, districtId: district._id,
     blockName: block.blockName, blockId: block._id,
     examinationCenterCapacity: Number(body.examinationCenterCapacity),
-    adjustments: body.adjustments ?? null, examType: body.examType || "",
-    examLevel: body.examLevel || "", paperCount: Number(body.paperCount || 0),
+    adjustments: null, examType: body.examType || "",
+    examLevel: "1", paperCount: null,
   };
   if (!payload.examinationCenter || !payload.examinationCenterCode || !Number.isFinite(payload.examinationCenterCapacity) || payload.examinationCenterCapacity < 1) {
     throw new ApiError(400, "Center name, unique code and capacity (minimum 1) are required");

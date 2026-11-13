@@ -4,6 +4,7 @@ import { db } from "../../db/index.js";
 const schema = new Schema(
   {
     schoolCode: { type: String, trim: true, index: true, sparse: true },
+    schoolType: { type: String, trim: true, default: null, index: true },
     schoolName: { type: String, required: true, trim: true },
     districtId: { type: Schema.Types.ObjectId, ref: "District", required: true, index: true },
     blockId: { type: Schema.Types.ObjectId, ref: "Block", required: true, index: true },
