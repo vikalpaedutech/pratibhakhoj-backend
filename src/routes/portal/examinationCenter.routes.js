@@ -7,6 +7,7 @@ import {
   updateExaminationCenter, disableExaminationCenter, listSchoolPreferences, saveSchoolPreferences,
   listBlockCenterRequirements, saveBlockCenterRequirement, listBlockExaminationCenters,
   createBlockExaminationCenter, getCenterSchoolPreferences, updateBlockExaminationCenter,
+  listBlockSchoolCenterPreferences, saveBlockSchoolCenterPreference, removeBlockExaminationCenter,
 } from "../../controllers/portal/examinationCenter.controllers.js";
 
 const router = Router();
@@ -15,7 +16,10 @@ router.get("/", requirePermission("SCHOOL_CENTER_PREFERENCE"), listExaminationCe
 router.get("/requirements", requirePermission("SCHOOL_CENTER_PREFERENCE"), listBlockCenterRequirements);
 router.put("/blocks/:blockId/requirements", requirePermission("SCHOOL_CENTER_PREFERENCE"), saveBlockCenterRequirement);
 router.get("/blocks/:blockId/centers", requirePermission("SCHOOL_CENTER_PREFERENCE"), listBlockExaminationCenters);
+router.get("/blocks/:blockId/schools", requirePermission("SCHOOL_CENTER_PREFERENCE"), listBlockSchoolCenterPreferences);
+router.put("/blocks/:blockId/schools/:schoolId/preferences", requirePermission("SCHOOL_CENTER_PREFERENCE"), saveBlockSchoolCenterPreference);
 router.post("/blocks/:blockId/centers", requirePermission("SCHOOL_CENTER_PREFERENCE"), createBlockExaminationCenter);
+router.delete("/blocks/:blockId/centers/:centerId", requirePermission("SCHOOL_CENTER_PREFERENCE"), removeBlockExaminationCenter);
 router.get("/centers/:centerId/schools", requirePermission("SCHOOL_CENTER_PREFERENCE"), getCenterSchoolPreferences);
 router.put("/centers/:centerId", requirePermission("SCHOOL_CENTER_PREFERENCE"), updateBlockExaminationCenter);
 router.post("/", requireAdmin, createExaminationCenter);

@@ -159,7 +159,7 @@ export const seedPermissions = async () => {
       code: "SCHOOL_CENTER_PREFERENCE",
       name: "School Center Preference",
       module: "Examination Management",
-      description: "Allows authorised users to assign schools to examination centers.",
+      description: "Allows authorised users to manage block-wise requirements, create and manage examination centers, and assign school preferences to examination centers.",
       isActive: true,
     },
   ];

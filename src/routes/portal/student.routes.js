@@ -12,6 +12,7 @@ import {
   updateOfficialStudent,
   deleteOfficialStudent,
   verifyStudent,
+  bulkVerifyStudents,
   verificationStudents,
   verificationFilters,
   verificationSummary,
@@ -99,6 +100,7 @@ router.patch(
 );
 
 router.delete("/:id", verifyJWT, deleteOfficialStudent);
+router.post("/verification/bulk-verify", verifyJWT, bulkVerifyStudents);
 router.get("/verification/filters", verifyJWT, verificationFilters);
 router.get("/verification/summary", verifyJWT, verificationSummary);
 router.get("/verification", verifyJWT, verificationStudents);

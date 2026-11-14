@@ -1179,6 +1179,57 @@ export const verifyStudent = asyncHandler(async (req, res) => {
   ));
 });
 
+export const bulkVerifyStudents = asyncHandler(async (req, res) => {
+  const rawIds = Array.isArray(req.body?.studentIds) ? req.body.studentIds : [];
+  const studentIds = [...new Set(rawIds.map((id) => String(id)).filter((id) => mongoose.isValidObjectId(id)))];
+  if (!studentIds.length) throw new ApiError(400, "Select at least one valid registration.");
+  if (studentIds.length > 500) throw new ApiError(400, "A maximum of 500 registrations can be verified at once.");
+
+  const students = await Student.find({
+    _id: { $in: studentIds },
+    isActive: true,
+    verificationStatus: "Pending",
+  }).select("_id examType districtId").lean();
+
+  const studentMap = new Map(students.map((student) => [String(student._id), student]));
+  const failures = [];
+  let verifiedCount = 0;
+
+  for (const studentId of studentIds) {
+    const student = studentMap.get(studentId);
+    if (!student) {
+      failures.push({ studentId, reason: "Registration is not pending or no longer available." });
+      continue;
+    }
+    try {
+      await getVerificationPermission(req.user._id, getExam(student.examType).code, student.districtId);
+      const result = await Student.updateOne(
+        { _id: student._id, isActive: true, verificationStatus: "Pending" },
+        {
+          $set: {
+            isVerified: true,
+            verificationStatus: "Verified",
+            verifiedBy: req.user._id,
+            verifiedAt: new Date(),
+            registrationFormVerificationRemark: null,
+          },
+        }
+      );
+      if (result.modifiedCount === 1) verifiedCount += 1;
+      else failures.push({ studentId, reason: "Registration status changed before verification." });
+    } catch (error) {
+      failures.push({ studentId, reason: error.message || "Not authorized for this registration." });
+    }
+  }
+
+  res.json(new ApiResponse(200, {
+    totalRequested: studentIds.length,
+    verifiedCount,
+    failedCount: failures.length,
+    failures,
+  }, `Bulk verification completed: ${verifiedCount} registration(s) verified.`));
+});
+
 export const verificationFilters = asyncHandler(async (req, res) => {
   const examType = getExam(req.query.examType).code;
   const permissions = await getVerificationAccess(req.user._id, examType);
@@ -1277,30 +1328,55 @@ export const verificationStudents = asyncHandler(async (req, res) => {
     }
   }
 
+  const photoStatus = String(req.query.photoStatus || "All");
+  if (photoStatus === "WithPhoto") {
+    filter.$and = [{
+      $or: [
+        { "studentImage.key": { $exists: true, $nin: [null, ""] } },
+        { "studentImage.url": { $exists: true, $nin: [null, ""] } },
+        { "studentImage.fileName": { $exists: true, $nin: [null, ""] } },
+        { "studentImage.originalName": { $exists: true, $nin: [null, ""] } },
+      ],
+    }];
+  } else if (photoStatus === "NoPhoto") {
+    filter.$and = [{
+      $and: [
+        { $or: [{ "studentImage.key": null }, { "studentImage.key": "" }, { "studentImage.key": { $exists: false } }] },
+        { $or: [{ "studentImage.url": null }, { "studentImage.url": "" }, { "studentImage.url": { $exists: false } }] },
+        { $or: [{ "studentImage.fileName": null }, { "studentImage.fileName": "" }, { "studentImage.fileName": { $exists: false } }] },
+        { $or: [{ "studentImage.originalName": null }, { "studentImage.originalName": "" }, { "studentImage.originalName": { $exists: false } }] },
+      ],
+    }];
+  }
+
   const searchFilter = await buildVerificationSearch(req.query.search, allowedDistrictIds);
   if (searchFilter) filter.$or = searchFilter.$or;
 
-  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 100);
+  const skip = Math.max(Number(req.query.skip) || 0, 0);
   const students = await Student.find(filter)
     .populate("districtId", "districtName")
     .populate("blockDistrictId", "blockName")
     .populate("schoolDistrictId", "schoolName")
     .populate("isRegisteredBy", "name contact")
     .sort({ updatedAt: -1 })
+    .skip(skip)
     .limit(limit)
     .lean();
 
   for (const student of students) {
     const key = getStoredFileKey(student.studentImage);
+    const directUrl = student.studentImage?.url || null;
+    let previewUrl = directUrl;
     if (key) {
       try {
-        student.studentImage = {
-          ...student.studentImage,
-          previewUrl: await getSignedUrlForSpacesKey(key, 900),
-        };
+        previewUrl = await getSignedUrlForSpacesKey(key, 900);
       } catch {
-        // Keep stored metadata when preview signing is unavailable.
+        // Fall back to a stored public URL if signing is unavailable.
       }
+    }
+    if (student.studentImage) {
+      student.studentImage = { ...student.studentImage, previewUrl };
     }
   }
 
@@ -1864,6 +1940,9 @@ export const bulkRegisterStudents = asyncHandler(async (req, res) => {
         if (existing.isVerified) {
           throw new ApiError(409, "This registration is already verified and cannot be updated from bulk upload");
         }
+
+
+        
 
         const beforeUpdate = existing.toObject();
         const merged = { ...beforeUpdate, ...payload, examType };
