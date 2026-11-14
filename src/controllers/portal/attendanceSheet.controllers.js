@@ -22,81 +22,180 @@ export const listAttendanceSheetDistricts = asyncHandler(async (_req, res) => {
   res.json({ success: true, data: districts });
 });
 
+const PAGE_LEFT = 42;
+const PAGE_RIGHT = 553;
+const TABLE_WIDTH = PAGE_RIGHT - PAGE_LEFT;
+const ROW_HEIGHT = 30;
+const HEADER_HEIGHT = 27;
+
 const drawPageHeader = (doc, districtName, middleOnly, brandingDir) => {
-  const pageWidth = doc.page.width;
-  const left = 42;
-  const right = pageWidth - 42;
   const haryanaLogo = path.join(brandingDir, "haryana.png");
   const buniyaadLogo = path.join(brandingDir, "Buniyaad.png");
 
-  if (doc.y > 70) doc.addPage();
-  const top = 25;
   doc.save();
-  doc.lineWidth(1).strokeColor("#555")
-    .moveTo(14, 14).lineTo(pageWidth - 14, 14)
-    .moveTo(14, 14).lineTo(14, doc.page.height - 14)
-    .moveTo(pageWidth - 14, 14).lineTo(pageWidth - 14, doc.page.height - 14)
-    .moveTo(14, doc.page.height - 14).lineTo(pageWidth - 14, doc.page.height - 14)
+  doc.lineWidth(0.8).strokeColor("#777")
+    .rect(14, 14, doc.page.width - 28, doc.page.height - 28)
     .stroke();
   doc.restore();
-  try { doc.image(haryanaLogo, left + 3, top, { fit: [48, 55] }); } catch {}
-  try { doc.image(buniyaadLogo, right - 57, top, { fit: [54, 55] }); } catch {}
-  doc.font("Helvetica-Bold").fontSize(15).fillColor("#5c4431")
-    .text("PRATIBHA KHOJ", left + 60, top + 4, { width: right - left - 120, align: "center" });
-  doc.fontSize(11).fillColor("#111")
-    .text("MISSION BUNIYAAD/ HARYANA SUPER 100", left + 60, top + 25, { width: right - left - 120, align: "center" });
-  doc.fontSize(10).text("DISTRICT LEVEL CAMPAIGN 2027-29", left + 60, top + 42, { width: right - left - 120, align: "center" });
-  doc.fontSize(11).text("STUDENT ATTENDANCE SHEET", left + 60, top + 58, { width: right - left - 120, align: "center" });
 
-  const infoY = top + 88;
-  const infoH = 23;
-  const infoWidths = [120, 175, right - left - 295];
-  const infoLabels = ["Date: -", `District: ${districtName}`, "Venue Name: -"];
-  let x = left;
-  infoLabels.forEach((label, i) => {
-    doc.rect(x, infoY, infoWidths[i], infoH).stroke("#222");
-    doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#111")
-      .text(label, x + 5, infoY + 7, { width: infoWidths[i] - 10, height: 10 });
-    x += infoWidths[i];
-  });
+  // Government and Mission Buniyaad marks, positioned on either side of the heading.
+  try { doc.image(haryanaLogo, PAGE_LEFT + 1, 27, { fit: [58, 64] }); } catch {}
+  try { doc.image(buniyaadLogo, PAGE_RIGHT - 59, 25, { fit: [58, 66] }); } catch {}
 
-  doc.y = infoY + infoH + 10;
+  const headingX = PAGE_LEFT + 67;
+  const headingWidth = TABLE_WIDTH - 134;
+  doc.font("Times-Bold").fillColor("#111")
+    .fontSize(19)
+    .text("MISSION BUNIYAAD", headingX, 30, { width: headingWidth, align: "center", lineBreak: false })
+    .fontSize(14)
+    .text("DISTRICT LEVEL CAMPAIGN 2027-29", headingX, 53, { width: headingWidth, align: "center", lineBreak: false })
+    .fontSize(13)
+    .text("ATTENDANCE SHEET", headingX, 72, { width: headingWidth, align: "center", lineBreak: false })
+    .fontSize(9.5)
+    .text(
+      middleOnly
+        ? "(For Government Middle Schools)"
+        : "(GHS, GSSS, GGSSS, GMSSSS, AMSSSS)",
+      headingX,
+      90,
+      { width: headingWidth, align: "center", lineBreak: false }
+    );
+
+  // Latest requested format has only Date and District fields (no Venue Name).
+  const infoY = 119;
+  const infoH = 22;
+  const dateWidth = Math.round(TABLE_WIDTH * 0.49);
+  const districtWidth = TABLE_WIDTH - dateWidth;
+  doc.lineWidth(0.8).strokeColor("#222")
+    .rect(PAGE_LEFT, infoY, dateWidth, infoH)
+    .rect(PAGE_LEFT + dateWidth, infoY, districtWidth, infoH)
+    .stroke();
+  doc.font("Times-Bold").fontSize(9.5).fillColor("#111")
+    .text("Date: -", PAGE_LEFT + 5, infoY + 6, { width: dateWidth - 10, lineBreak: false });
+  const districtCellX = PAGE_LEFT + dateWidth + 5;
+  doc.font("Times-Bold").fontSize(9.5).fillColor("#111");
+  const districtLabelWidth = doc.widthOfString("District:");
+  doc.text("District:", districtCellX, infoY + 6, { lineBreak: false });
+  doc.font("Times-Bold").fontSize(12).fillColor("#111")
+    .text(districtName || "-", districtCellX + districtLabelWidth + 5, infoY + 4, {
+      width: districtWidth - districtLabelWidth - 15,
+      lineBreak: false,
+      ellipsis: true,
+    });
+
   doc._middleOnly = middleOnly;
-  doc._tableX = left;
-  doc._tableWidths = middleOnly ? [28, 140, 155, 188] : [28, 120, 100, 80, 105, 78];
-  doc._tableHeaders = middleOnly
-    ? ["SR. NO", "SCHOOL NAME", "8TH STUDENT NAME", "SIGNATURE"]
-    : ["SR. NO", "SCHOOL NAME", "8TH STUDENT NAME", "SIGNATURE", "10TH STUDENT NAME", "SIGNATURE"];
+  doc._tableX = PAGE_LEFT;
+  doc._tableWidths = middleOnly
+    ? [32, 137, 80, 192, 70]
+    : [32, 150, 60, 160, 109];
+  doc.y = infoY + infoH + 10;
+};
+
+const drawBlockHeading = (doc, blockName) => {
+  const total = TABLE_WIDTH;
+  const y = doc.y;
+  doc.rect(PAGE_LEFT, y, total, 27).fillAndStroke("#d9e8f3", "#222");
+  doc.font("Times-Bold").fontSize(12).fillColor("#111")
+    .text(String(blockName || "Other").toUpperCase(), PAGE_LEFT + 3, y + 7, {
+      width: total - 6,
+      align: "center",
+      lineBreak: false,
+    });
+  doc.y = y + 27;
 };
 
 const drawTableHeader = (doc) => {
-  const x0 = doc._tableX;
+  const headers = ["SR. NO", "SCHOOL NAME", "CLASS", "STUDENT NAME", "SIGNATURE"];
   const widths = doc._tableWidths;
-  const headers = doc._tableHeaders;
-  const total = widths.reduce((a, b) => a + b, 0);
   const y = doc.y;
-  doc.rect(x0, y, total, 28).fillAndStroke("#dce8f2", "#222");
-  let x = x0;
-  headers.forEach((header, i) => {
-    if (i > 0) doc.moveTo(x, y).lineTo(x, y + 28).stroke("#222");
-    doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#111")
-      .text(header, x + 2, y + 7, { width: widths[i] - 4, height: 16, align: "center", valign: "center" });
-    x += widths[i];
+  doc.rect(PAGE_LEFT, y, TABLE_WIDTH, HEADER_HEIGHT).fillAndStroke("#dce8f2", "#222");
+  let x = PAGE_LEFT;
+  headers.forEach((header, index) => {
+    if (index > 0) {
+      doc.moveTo(x, y).lineTo(x, y + HEADER_HEIGHT).lineWidth(0.8).stroke("#222");
+    }
+    doc.font("Times-Bold").fontSize(9).fillColor("#111")
+      .text(header, x + 2, y + 8, {
+        width: widths[index] - 4,
+        height: 13,
+        align: "center",
+        lineBreak: false,
+      });
+    x += widths[index];
   });
-  doc.y = y + 28;
+  doc.y = y + HEADER_HEIGHT;
+};
+
+const drawSchoolRows = (doc, school, schoolNumber, middleOnly) => {
+  const widths = doc._tableWidths;
+  const rowCount = middleOnly ? 2 : 4;
+  const groupHeight = ROW_HEIGHT * rowCount;
+  const y = doc.y;
+
+  // Serial number and school name are vertically merged across all class rows.
+  doc.lineWidth(0.8).strokeColor("#222")
+    .rect(PAGE_LEFT, y, widths[0], groupHeight)
+    .rect(PAGE_LEFT + widths[0], y, widths[1], groupHeight)
+    .stroke();
+
+  // Class, student-name and signature cells are separate for every row.
+  let x = PAGE_LEFT + widths[0] + widths[1];
+  for (let row = 0; row < rowCount; row += 1) {
+    let cellX = x;
+    for (let col = 2; col < widths.length; col += 1) {
+      doc.rect(cellX, y + row * ROW_HEIGHT, widths[col], ROW_HEIGHT).stroke();
+      cellX += widths[col];
+    }
+  }
+
+  doc.font("Times-Roman").fontSize(9).fillColor("#111")
+    .text(String(schoolNumber), PAGE_LEFT + 2, y + (groupHeight / 2) - 5, {
+      width: widths[0] - 4,
+      align: "center",
+      lineBreak: false,
+    });
+
+  doc.font("Times-Bold").fontSize(10).fillColor("#111")
+    .text(String(school.schoolName || "").toUpperCase(), PAGE_LEFT + widths[0] + 5, y + 5, {
+      width: widths[1] - 10,
+      height: groupHeight - 10,
+      align: "left",
+      valign: "center",
+      ellipsis: true,
+    });
+
+  const classValues = middleOnly ? ["08th", "08th"] : ["08th", "08th", "10th", "10th"];
+  const classX = PAGE_LEFT + widths[0] + widths[1];
+  for (let row = 0; row < rowCount; row += 1) {
+    doc.font("Times-Bold").fontSize(10).fillColor("#111")
+      .text(classValues[row], classX + 2, y + row * ROW_HEIGHT + 9, {
+        width: widths[2] - 4,
+        align: "center",
+        lineBreak: false,
+      });
+  }
+
+  doc.y = y + groupHeight;
 };
 
 export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
   const { districtId, schoolType } = req.query;
-  if (!districtId || !schoolType) throw new ApiError(400, "District and school type are required");
+  if (!districtId || !schoolType) {
+    throw new ApiError(400, "District and school type are required");
+  }
 
   const district = await District.findOne({ _id: districtId, isActive: true }).lean();
   if (!district) throw new ApiError(404, "District not found");
 
   const schoolFilter = { districtId, isActive: true };
   const middleOnly = schoolType === SCHOOL_TYPES.MIDDLE;
-  if (middleOnly) schoolFilter.schoolType = "Middle School";
-  else schoolFilter.schoolType = { $nin: ["Middle School", null, ""] };
+  if (middleOnly) {
+    schoolFilter.schoolType = "Middle School";
+  } else if (schoolType === SCHOOL_TYPES.OTHER) {
+    schoolFilter.schoolType = { $nin: ["Middle School", null, ""] };
+  } else {
+    throw new ApiError(400, "Invalid school type selected");
+  }
 
   const schools = await School.find(schoolFilter)
     .select("schoolName schoolType blockId")
@@ -104,7 +203,9 @@ export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
     .sort({ schoolName: 1 })
     .lean();
 
-  if (!schools.length) throw new ApiError(404, "No schools found for the selected district and school type");
+  if (!schools.length) {
+    throw new ApiError(404, "No schools found for the selected district and school type");
+  }
 
   const schoolTypeOrder = [
     "High School",
@@ -114,22 +215,26 @@ export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
   ];
   const schoolTypeRank = (type) => {
     const index = schoolTypeOrder.indexOf(String(type || "").trim());
-    return index === -1 ? schoolTypeOrder.length : index; // Other / unlisted types last
+    return index === -1 ? schoolTypeOrder.length : index;
   };
+
   schools.sort((a, b) => {
     const blockCompare = (a.blockId?.blockName || "Other").localeCompare(
-      b.blockId?.blockName || "Other", undefined, { numeric: true, sensitivity: "base" }
+      b.blockId?.blockName || "Other",
+      undefined,
+      { numeric: true, sensitivity: "base" }
     );
     if (blockCompare) return blockCompare;
     const typeCompare = schoolTypeRank(a.schoolType) - schoolTypeRank(b.schoolType);
     if (typeCompare) return typeCompare;
     return (a.schoolName || "").localeCompare(
-      b.schoolName || "", undefined, { numeric: true, sensitivity: "base" }
+      b.schoolName || "",
+      undefined,
+      { numeric: true, sensitivity: "base" }
     );
   });
 
   const brandingDir = path.resolve(__dirname, "../../../public/branding");
-  const rowHeight = 29;
   const groups = new Map();
   for (const school of schools) {
     const blockName = school.blockId?.blockName || "Other";
@@ -137,11 +242,12 @@ export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
     groups.get(blockName).push(school);
   }
 
+  // Keep the existing ZIP behavior: one separate PDF for every block.
   const pdfFiles = [];
   for (const [blockName, blockSchools] of groups) {
     const doc = new PDFDocument({
       size: "A4",
-      margins: { top: 24, bottom: 30, left: 42, right: 42 },
+      margins: { top: 20, bottom: 28, left: PAGE_LEFT, right: 42 },
       autoFirstPage: true,
       bufferPages: false,
     });
@@ -152,65 +258,24 @@ export const downloadAttendanceSheetDlc = asyncHandler(async (req, res) => {
       doc.on("end", () => resolve(Buffer.concat(chunks)));
       doc.on("error", reject);
 
-      const drawBlockHeading = (addGap = true) => {
-        const blockGap = addGap ? 14 : 0;
-        if (doc.y + blockGap + 22 + 28 + rowHeight * 2 > doc.page.height - 35) {
-          doc.addPage();
-          drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
-        } else if (blockGap) {
-          doc.y += blockGap;
-        }
-
-        const widths = doc._tableWidths;
-        const total = widths.reduce((a, b) => a + b, 0);
-        doc.rect(doc._tableX, doc.y, total, 22).fillAndStroke("#e5edf5", "#222");
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#111")
-          .text(blockName.toUpperCase(), doc._tableX + 2, doc.y + 6, {
-            width: total - 4,
-            align: "center",
-          });
-        doc.y += 22;
+      const startBlockPage = () => {
+        drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
+        drawBlockHeading(doc, blockName);
         drawTableHeader(doc);
       };
 
-      drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
-      drawBlockHeading(true);
-
+      startBlockPage();
       let schoolNumber = 0;
-      for (const school of blockSchools) {
-        if (doc.y + rowHeight * 2 > doc.page.height - 35) {
-          doc.addPage();
-          drawPageHeader(doc, district.districtName, middleOnly, brandingDir);
-          drawBlockHeading(false);
-        }
+      const rowsPerSchool = middleOnly ? 2 : 4;
+      const requiredHeight = ROW_HEIGHT * rowsPerSchool;
 
+      for (const school of blockSchools) {
+        if (doc.y + requiredHeight > doc.page.height - 32) {
+          doc.addPage();
+          startBlockPage();
+        }
         schoolNumber += 1;
-        const x0 = doc._tableX;
-        const widths = doc._tableWidths;
-        const y0 = doc.y;
-        const h = rowHeight * 2;
-        let x = x0;
-        widths.forEach((width) => {
-          doc.rect(x, y0, width, h).stroke("#222");
-          x += width;
-        });
-        doc.moveTo(x0 + widths[0] + widths[1], y0 + rowHeight)
-          .lineTo(x0 + widths.reduce((a, b) => a + b, 0), y0 + rowHeight)
-          .stroke();
-        doc.font("Helvetica").fontSize(8).fillColor("#111")
-          .text(String(schoolNumber), x0 + 2, y0 + 23, {
-            width: widths[0] - 4,
-            align: "center",
-          });
-        doc.font("Helvetica").fontSize(7.5)
-          .text(school.schoolName || "", x0 + widths[0] + 4, y0 + 24, {
-            width: widths[1] - 8,
-            height: h - 8,
-            align: "left",
-            valign: "center",
-            ellipsis: true,
-          });
-        doc.y = y0 + h;
+        drawSchoolRows(doc, school, schoolNumber, middleOnly);
       }
 
       doc.end();
