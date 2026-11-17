@@ -28,6 +28,7 @@ import {
   allRegistrationsDashboard,
   getAllRegistrationStudentForEdit,
   updateAllRegistrationStudent,
+  deleteAllRegistrationStudent,
 } from "../../controllers/portal/student.controllers.js";
 import { verifyJWT, optionalJWT } from "../../middlewares/auth/auth.middlewares.js";
 import { requireLevel1DashboardAccess, setDashboardView } from "../../middlewares/auth/dashboardAccess.middlewares.js";
@@ -78,6 +79,8 @@ router.get("/", verifyJWT, listOfficialStudents);
 router.get("/dashboard", verifyJWT, dashboard);
 router.get("/all-registrations/:examType", verifyJWT, allRegistrationsDashboard);
 router.get("/all-registrations/record/:id", verifyJWT, getAllRegistrationStudentForEdit);
+
+router.delete("/all-registrations/:id", verifyJWT, deleteAllRegistrationStudent);
 
 router.patch(
   "/all-registrations/:id",

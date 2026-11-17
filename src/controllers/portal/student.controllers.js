@@ -129,7 +129,7 @@ const normalizeDob = (value) => {
   return value;
 };
 
-const sanitize = (payload, examType, { bulk = false } = {}) => {
+const sanitize = (payload, examType, { bulk = false, allowClassChange = false } = {}) => {
   const exam = getExam(examType);
 
   return {
@@ -164,18 +164,18 @@ const sanitize = (payload, examType, { bulk = false } = {}) => {
 
     // For bulk uploads, the Class column in the uploaded template is the source of truth.
     // Non-bulk registration continues to use the examination configuration.
-    classOfStudent: bulk ? Number(payload.class) : exam.classOfStudent,
+    classOfStudent: bulk ? Number(payload.class) : (allowClassChange && payload.classOfStudent ? Number(payload.classOfStudent) : exam.classOfStudent),
   };
 };
 
-const validateStudent = async (data, examType, { bulk = false } = {}) => {
+const validateStudent = async (data, examType, { bulk = false, allowBlankMotherName = false } = {}) => {
   const exam = getExam(examType);
 
   const required = [
     "studentSrn",
     "name",
     "fatherName",
-    ...(bulk ? [] : ["motherName"]),
+    ...(bulk || allowBlankMotherName ? [] : ["motherName"]),
     "dob",
     "gender",
     "category",
@@ -529,8 +529,8 @@ export const allRegistrationsDashboard = asyncHandler(async (req, res) => {
   const { examType, filter } = buildAllRegistrationFilter(req);
   await requireAllRegistrationDashboardAccess(req, examType);
 
-  const requestedLimit = Number(req.query.limit) || 5000;
-  const limit = Math.min(Math.max(requestedLimit, 1), 5000);
+  const requestedLimit = Number(req.query.limit) || 50;
+  const limit = Math.min(Math.max(requestedLimit, 1), 50);
   const page = Math.max(Number(req.query.page) || 1, 1);
   const skip = (page - 1) * limit;
 
@@ -567,10 +567,6 @@ export const getAllRegistrationStudentForEdit = asyncHandler(async (req, res) =>
   }).lean();
 
   if (!student) throw new ApiError(404, "Level 1 registration not found");
-  if (student.isVerified || student.verificationStatus === "Verified") {
-    throw new ApiError(403, "Verified registrations cannot be edited");
-  }
-
   const responseStudent = { ...student };
   for (const field of ["studentImage", "previousClassResult"]) {
     const key = getStoredFileKey(student[field]);
@@ -598,18 +594,26 @@ export const updateAllRegistrationStudent = asyncHandler(async (req, res) => {
   });
 
   if (!current) throw new ApiError(404, "Level 1 registration not found");
-  if (current.isVerified || current.verificationStatus === "Verified") {
-    throw new ApiError(403, "Verified registrations cannot be edited");
-  }
-
   const data = sanitize(
     { ...current.toObject(), ...req.body, studentSrn: current.studentSrn },
-    examType
+    examType,
+    { allowClassChange: true }
   );
-  await validateStudent(data, examType);
+  await validateStudent(data, examType, { allowBlankMotherName: true });
 
   const beforeUpdate = current.toObject();
   const { fileData, oldKeys } = await replaceUploadedFiles(current, req.files || {});
+  const filesToDelete = [...oldKeys];
+  if (String(req.body.removeStudentImage || "").toLowerCase() === "true" && !fileData.studentImage) {
+    const key = getStoredFileKey(current.studentImage);
+    if (key) filesToDelete.push(key);
+    fileData.studentImage = null;
+  }
+  if (String(req.body.removePreviousClassResult || "").toLowerCase() === "true" && !fileData.previousClassResult) {
+    const key = getStoredFileKey(current.previousClassResult);
+    if (key) filesToDelete.push(key);
+    fileData.previousClassResult = null;
+  }
   const newlyUploadedKeys = Object.values(fileData).map((item) => item?.key).filter(Boolean);
 
   try {
@@ -626,7 +630,7 @@ export const updateAllRegistrationStudent = asyncHandler(async (req, res) => {
     throw error;
   }
 
-  await deleteOldFiles(oldKeys);
+  await deleteOldFiles(filesToDelete);
   await createStudentUpdateLog({
     student: current,
     before: beforeUpdate,
@@ -634,6 +638,26 @@ export const updateAllRegistrationStudent = asyncHandler(async (req, res) => {
     source: "ALL_REGISTRATIONS",
   });
   res.json(new ApiResponse(200, current, "All-registration record updated successfully"));
+});
+
+export const deleteAllRegistrationStudent = asyncHandler(async (req, res) => {
+  const examType = getExam(req.body?.examType || req.query.examType).code;
+  await requireAllRegistrationDashboardAccess(req, examType);
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) throw new ApiError(400, "Invalid student ID");
+  const student = await Student.findOne({ _id: req.params.id, examType, examinationLevel: 1, isActive: true });
+  if (!student) throw new ApiError(404, "Level 1 registration not found");
+  student.isActive = false;
+  student.updatedBy = req.user._id;
+  await student.save();
+  try {
+    await StudentLog.create({
+      studentId: student._id, updatedBy: req.user._id, examType,
+      examinationLevel: 1, action: "DELETE", source: "ALL_REGISTRATIONS",
+      changedFields: ["isActive"],
+      changes: [{ field: "isActive", oldValue: true, newValue: false }],
+    });
+  } catch (error) { console.error("Unable to create StudentLog delete record", error); }
+  res.json(new ApiResponse(200, { _id: student._id }, "Registration deleted successfully"));
 });
 
 export const checkStudentBySrn = asyncHandler(async (req, res) => {

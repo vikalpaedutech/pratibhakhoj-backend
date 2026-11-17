@@ -33,7 +33,7 @@ const schema = new Schema(
     examinationLevel: { type: Number, enum: [1, 2, 3], default: 1, index: true },
     action: {
       type: String,
-      enum: ["UPDATE"],
+      enum: ["UPDATE", "DELETE"],
       default: "UPDATE",
       index: true,
     },
