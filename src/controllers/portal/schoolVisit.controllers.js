@@ -187,27 +187,28 @@ const createVisitPdf = async ({ visit, blank = false }) => {
   pair(x,y0,"District",district,a,b); pair(x+a+b,y0,"Date",date,d,e);
   pair(x,y0+14,"Block",block,a,b); pair(x+a+b,y0+14,"Principal",principal,d,e);
   pair(x,y0+28,"School Name",school,a,b); pair(x+a+b,y0+28,"School Code",code,d,e);
-  txt("2. AWARENESS CAMPAIGN ACTIVITIES",35,207,350,13,8);
-  const acts=visit?.form?.activities||[], ax=36, at=220, ac=[35,207,70,210];
+  pair(x,y0+42,"Travelled From",visit?.travelledFrom||"",a,b); pair(x+a+b,y0+42,"Distance (KM)",visit?.distanceKm??"",d,e);
+  txt("2. AWARENESS CAMPAIGN ACTIVITIES",35,221,350,13,8);
+  const acts=visit?.form?.activities||[], ax=36, at=234, ac=[35,207,70,210];
   ["S. No.","Activity","Status (Yes/No)","Remarks"].forEach((v,i)=>{const xx=ax+ac.slice(0,i).reduce((s,n)=>s+n,0);cell(xx,at,ac[i],15,v,blue,6.2,"center");});
   ACTIVITIES.forEach((v,i)=>{const t=at+15+i*20, r=acts[i]||{}; let xx=ax; [String(i+1),v,r.status||"",r.remarks||""].forEach((val,j)=>{cell(xx,t,ac[j],20,val,null,j===1?6.1:6.5,j===0||j===2?"center":"left");xx+=ac[j];});});
-  txt("3. STUDENT REGISTRATION STATUS",35,343,350,13,8);
-  const sx=36, st=356, sc=[67,49,51,55,65,66,75,94];
+  txt("3. STUDENT REGISTRATION STATUS",35,357,350,13,8);
+  const sx=36, st=370, sc=[67,49,51,55,65,66,75,94];
   const sh=["Programme","Class","Total Students","Students Present","Registered Students Above 60%","Registered Students Below 60%","Total Registrations Completed","Registrations Pending"];
   let xx=sx; sh.forEach((v,i)=>{cell(xx,st,sc[i],33,v,blue,5.7,"center");xx+=sc[i];});
   const stats=visit?.form?.studentRegistrationStatus||[];
   PROGRAMMES.forEach((p,i)=>{const r=stats[i]||{}, vals=[p.programme,p.eligibleClass,r.totalStudents??"",r.studentsPresent??"",r.studentsAbove60??"",r.studentsBelow60??"",r.registrationsCompleted??"",r.registrationsPending??""];xx=sx;vals.forEach((v,j)=>{cell(xx,st+33+i*27,sc[j],27,v,null,j<2?6.1:6.4,j<2?"left":"center");xx+=sc[j];});});
-  txt("4. PENDING REGISTRATION & FOLLOW-UP",35,449,360,13,8);
-  const fx=36, ft=462, fc=[98,110,220,94], fh=["Programme","Pending Registrations","Reason / Remarks","Committed Date for Completion"];
+  txt("4. PENDING REGISTRATION & FOLLOW-UP",35,463,360,13,8);
+  const fx=36, ft=476, fc=[98,110,220,94], fh=["Programme","Pending Registrations","Reason / Remarks","Committed Date for Completion"];
   xx=fx;fh.forEach((v,i)=>{cell(xx,ft,fc[i],32,v,blue,6.0,"center");xx+=fc[i];});
   const follow=visit?.form?.pendingFollowUp||[];
   PROGRAMMES.forEach((p,i)=>{const r=follow[i]||{},vals=[p.programme,r.pendingRegistrations??"",r.reasonRemarks||"",formatDate(r.committedDate)];xx=fx;vals.forEach((v,j)=>{cell(xx,ft+32+i*34,fc[j],34,v,null,6.2,j===1||j===3?"center":"left");xx+=fc[j];});});
-  txt("6. SIGN-OFF & SUBMISSION",35,603,300,13,8);
-  txt("Block Campaign Incharge Name:",36,642,190,14,6.7); line(143,654,255,654);
-  txt("School In-Charge Name:",355,642,190,14,6.7); line(438,654,550,654);
-  txt("Signature:",36,671,70,14,6.7); line(78,683,180,683);
-  txt("Signature:",355,671,70,14,6.7); line(397,683,490,683);
-  txt("Stamp:",355,700,70,14,6.7); line(390,712,490,712);
+  txt("6. SIGN-OFF & SUBMISSION",35,617,300,13,8);
+  txt("Block Campaign Incharge Name:",36,656,190,14,6.7); line(143,668,255,668);
+  txt("School In-Charge Name:",355,656,190,14,6.7); line(438,668,550,668);
+  txt("Signature:",36,685,70,14,6.7); line(78,697,180,697);
+  txt("Signature:",355,685,70,14,6.7); line(397,697,490,697);
+  txt("Stamp:",355,714,70,14,6.7); line(390,726,490,726);
   return pdfDoc.save();
 };
 
@@ -247,6 +248,8 @@ const reportRow = async (visit) => {
     "District": visit.districtId?.districtName || "",
     "Principal": visit.form?.schoolCampaign?.principal || "",
     "Description": visit.description || "",
+    "Travelled From": visit.travelledFrom || "",
+    "Distance (KM)": visit.distanceKm ?? "",
   };
   activities.slice(0, 8).forEach((a, i) => {
     row[`Activity ${i + 1} Status`] = a.status || "";
@@ -320,8 +323,9 @@ export const exportVisits = asyncHandler(async (req, res) => {
 });
 
 export const createVisit = asyncHandler(async (req, res) => {
-  const { visitDate, districtId, blockId, schoolId, description = "" } = req.body;
+  const { visitDate, districtId, blockId, schoolId, description = "", travelledFrom = "", distanceKm = "" } = req.body;
   if (!visitDate || !districtId || !blockId || !schoolId) throw new ApiError(400, "Visit date, district, block and school are required");
+  if (distanceKm !== "" && distanceKm !== null && (!Number.isFinite(Number(distanceKm)) || Number(distanceKm) < 0)) throw new ApiError(400, "Distance must be a valid non-negative number");
   if (!(await isSchoolAccessible(req.user._id, schoolId))) throw new ApiError(403, "You do not have access to this school");
 
   const school = await School.findOne({ _id: schoolId, districtId, blockId, isActive: true }).lean();
@@ -334,8 +338,46 @@ export const createVisit = asyncHandler(async (req, res) => {
     blockId,
     visitDate: dateOnly(visitDate),
     description: String(description).trim(),
+    travelledFrom: String(travelledFrom || "").trim(),
+    distanceKm: distanceKm === "" || distanceKm === null || distanceKm === undefined ? null : Number(distanceKm),
   });
   res.status(201).json(new ApiResponse(201, await getVisit(visit._id), "School visit created successfully"));
+});
+
+
+export const updateVisit = asyncHandler(async (req, res) => {
+  const visit = await SchoolVisit.findById(req.params.id);
+  if (!visit) throw new ApiError(404, "School visit not found");
+  if (String(visit.userId) !== String(req.user._id)) throw new ApiError(403, "You can only update your own school visits");
+
+  const { visitDate, districtId, blockId, schoolId, description = "", travelledFrom = "", distanceKm = "" } = req.body;
+  if (!visitDate || !districtId || !blockId || !schoolId) throw new ApiError(400, "Visit date, district, block and school are required");
+  if (!(await isSchoolAccessible(req.user._id, schoolId))) throw new ApiError(403, "You do not have access to this school");
+  const school = await School.findOne({ _id: schoolId, districtId, blockId, isActive: true }).lean();
+  if (!school) throw new ApiError(400, "Selected school does not match the selected district/block");
+  if (distanceKm !== "" && distanceKm !== null && (!Number.isFinite(Number(distanceKm)) || Number(distanceKm) < 0)) {
+    throw new ApiError(400, "Distance must be a valid non-negative number");
+  }
+  visit.visitDate = dateOnly(visitDate);
+  visit.districtId = districtId;
+  visit.blockId = blockId;
+  visit.schoolId = schoolId;
+  visit.description = String(description).trim();
+  visit.travelledFrom = String(travelledFrom || "").trim();
+  visit.distanceKm = distanceKm === "" || distanceKm === null ? null : Number(distanceKm);
+  await visit.save();
+  res.json(new ApiResponse(200, await getVisit(visit._id), "School visit updated successfully"));
+});
+
+export const deleteVisit = asyncHandler(async (req, res) => {
+  const visit = await SchoolVisit.findById(req.params.id);
+  if (!visit) throw new ApiError(404, "School visit not found");
+  if (String(visit.userId) !== String(req.user._id)) throw new ApiError(403, "You can only delete your own school visits");
+  await Promise.all([
+    VisitForm.deleteOne({ schoolVisitId: visit._id }),
+    SchoolVisit.deleteOne({ _id: visit._id }),
+  ]);
+  res.json(new ApiResponse(200, null, "School visit deleted successfully"));
 });
 
 export const getVisitDetails = asyncHandler(async (req, res) => {

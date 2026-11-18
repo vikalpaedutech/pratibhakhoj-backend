@@ -6,6 +6,8 @@ import {
   listVisits,
   exportVisits,
   createVisit,
+  updateVisit,
+  deleteVisit,
   getVisitDetails,
   saveVisitForm,
   downloadVisitPdf,
@@ -25,6 +27,8 @@ router.get("/", listVisits);
 router.get("/template", downloadBlankVisitPdf);
 router.get("/export", exportVisits);
 router.post("/", createVisit);
+router.put("/:id", updateVisit);
+router.delete("/:id", deleteVisit);
 router.get("/:id", getVisitDetails);
 router.put("/:id/form", saveVisitForm);
 router.get("/:id/pdf", downloadVisitPdf);

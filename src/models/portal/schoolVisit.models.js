@@ -16,6 +16,8 @@ const schema = new Schema({
   blockId: { type: Schema.Types.ObjectId, ref: "Block", required: true, index: true },
   visitDate: { type: Date, required: true, index: true },
   description: { type: String, default: "", trim: true },
+  travelledFrom: { type: String, default: "", trim: true },
+  distanceKm: { type: Number, default: null, min: 0 },
   status: { type: String, enum: ["PLANNED", "VISITED"], default: "PLANNED", index: true },
   attachment: { type: attachmentSchema, default: null },
 }, { timestamps: true });

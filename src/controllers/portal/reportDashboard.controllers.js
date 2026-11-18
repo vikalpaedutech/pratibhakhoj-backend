@@ -249,9 +249,28 @@ const schoolVisitRows = async ({ roleId = "", startDate = "", endDate = "", dist
   const range = dateRange(startDate, endDate, "visitDate"); Object.assign(visitFilter, range);
   if (districtId) visitFilter.districtId = districtId;
   if (blockId) visitFilter.blockId = blockId;
+  const matchingVisits = userIds.length ? await SchoolVisit.find(visitFilter)
+    .populate("districtId", "districtName").populate("blockId", "blockName")
+    .populate("schoolId", "schoolName").lean() : [];
+  const matchingUserIds = new Set(matchingVisits.map((v) => String(v.userId)));
+  const regionMap = new Map();
+  for (const visit of matchingVisits) {
+    const key = String(visit.userId);
+    if (!regionMap.has(key)) regionMap.set(key, { districts: new Set(), blocks: new Set(), schools: new Set() });
+    const region = regionMap.get(key);
+    if (visit.districtId?.districtName) region.districts.add(visit.districtId.districtName);
+    if (visit.blockId?.blockName) region.blocks.add(visit.blockId.blockName);
+    if (visit.schoolId?.schoolName) region.schools.add(visit.schoolId.schoolName);
+  }
   const grouped = userIds.length ? await SchoolVisit.aggregate([{ $match: visitFilter }, { $group: { _id: "$userId", visitsCreated: { $sum: 1 }, visited: { $sum: { $cond: [{ $eq: ["$status", "VISITED"] }, 1, 0] } }, pending: { $sum: { $cond: [{ $eq: ["$status", "PLANNED"] }, 1, 0] } }, pdfUploaded: { $sum: { $cond: [{ $ne: ["$attachment", null] }, 1, 0] } } } }]) : [];
   const map = new Map(grouped.map((x) => [String(x._id), x]));
-  return filteredUsers.sort((a,b)=>a.name.localeCompare(b.name)).map((u,i) => { const x=map.get(String(u._id))||{}; return { "#": i+1, "UserName": u.name, "Contact": u.contact, "Role": u.roleId?.name||"-", "Visits Created": x.visitsCreated||0, "Visited": x.visited||0, "Pending": x.pending||0, "PDFUploaded": x.pdfUploaded||0, "_userId": String(u._id) }; });
+  const usersToShow = (districtId || blockId || startDate || endDate) ? filteredUsers.filter((u) => matchingUserIds.has(String(u._id))) : filteredUsers;
+  return usersToShow.sort((a,b)=>a.name.localeCompare(b.name)).map((u,i) => {
+    const x=map.get(String(u._id))||{}, region=regionMap.get(String(u._id))||{districts:new Set(),blocks:new Set(),schools:new Set()};
+    return { "#": i+1, "UserName": u.name, "Contact": u.contact, "Role": u.roleId?.name||"-",
+      "District": [...region.districts].join(", "), "Block": [...region.blocks].join(", "), "School": [...region.schools].join(", "),
+      "Visits Created": x.visitsCreated||0, "Visited": x.visited||0, "Pending": x.pending||0, "PDFUploaded": x.pdfUploaded||0, "_userId": String(u._id) };
+  });
 };
 
 const visitDetailRows = async ({ userId = "", startDate = "", endDate = "", districtId = "", blockId = "" }) => {
@@ -259,7 +278,7 @@ const visitDetailRows = async ({ userId = "", startDate = "", endDate = "", dist
   const visits = await SchoolVisit.find(filter).populate("schoolId","schoolName schoolCode").populate("districtId","districtName").populate("blockId","blockName").populate("userId","name contact").sort({visitDate:1}).lean();
   const forms = await VisitForm.find({ schoolVisitId: { $in: visits.map(v=>v._id) } }).lean(); const formMap=new Map(forms.map(f=>[String(f.schoolVisitId),f]));
   const rows=[];
-  for(const v of visits){ const f=formMap.get(String(v._id)); const activities=f?.awarenessCampaignActivities||[]; const status=f?.studentRegistrationStatus||[]; const pending=f?.pendingRegistrationFollowUp||[]; const row={"Visit Date":v.visitDate?new Date(v.visitDate).toLocaleDateString("en-IN"):"","UserName":v.userId?.name||"","Contact":v.userId?.contact||"","School Name":v.schoolId?.schoolName||"","School Code":v.schoolId?.schoolCode||"","Block":v.blockId?.blockName||"","District":v.districtId?.districtName||"","Status":v.status,"Description":v.description||"","Centre Coordinator":f?.centreCoordinator||""}; activities.forEach((a,i)=>{row[`Activity ${i+1}`]=a.activity;row[`Activity ${i+1} Status`]=a.status;row[`Activity ${i+1} Remarks`]=a.remarks;}); status.forEach((x,i)=>{const p=i===0?"Mission Buniyaad":"Haryana Super 100"; row[`${p} Eligible Class`]=x.eligibleClass;row[`${p} Total Students`]=x.totalStudents??"";row[`${p} Students Above 60%`]=x.studentsAbove60??"";row[`${p} Students Below 60%`]=x.studentsBelow60??"";row[`${p} Students Present`]=x.studentsPresent??"";row[`${p} Students Absent`]=x.studentsAbsent??"";row[`${p} Registrations Completed`]=x.registrationsCompleted??"";row[`${p} Registrations Pending`]=x.registrationsPending??"";}); pending.forEach((x,i)=>{const p=i===0?"Mission Buniyaad":"Haryana Super 100";row[`${p} Pending Registrations`]=x.pendingRegistrations??"";row[`${p} Reason / Remarks`]=x.reasonRemarks||"";row[`${p} Committed Date`]=x.committedDate?new Date(x.committedDate).toLocaleDateString("en-IN"):"";}); row["Centre Coordinator Name"]=f?.centreCoordinatorName||"";row["School Head Name"]=f?.schoolHeadName||"";row["PDF Uploaded"]=v.attachment?"Yes":"No"; if(v.attachment?.key){try{row["Attachment"]=await getSignedUrlForSpacesKey(v.attachment.key,7*24*60*60)}catch{row["Attachment"]=""}}else row["Attachment"]=""; rows.push(row); }
+  for(const v of visits){ const f=formMap.get(String(v._id)); const activities=f?.awarenessCampaignActivities||[]; const status=f?.studentRegistrationStatus||[]; const pending=f?.pendingRegistrationFollowUp||[]; const row={"Visit Date":v.visitDate?new Date(v.visitDate).toLocaleDateString("en-IN"):"","UserName":v.userId?.name||"","Contact":v.userId?.contact||"","School Name":v.schoolId?.schoolName||"","School Code":v.schoolId?.schoolCode||"","Block":v.blockId?.blockName||"","District":v.districtId?.districtName||"","Status":v.status,"Description":v.description||"","Travelled From":v.travelledFrom||"","Distance (KM)":v.distanceKm??"","Centre Coordinator":f?.centreCoordinator||""}; activities.forEach((a,i)=>{row[`Activity ${i+1}`]=a.activity;row[`Activity ${i+1} Status`]=a.status;row[`Activity ${i+1} Remarks`]=a.remarks;}); status.forEach((x,i)=>{const p=i===0?"Mission Buniyaad":"Haryana Super 100"; row[`${p} Eligible Class`]=x.eligibleClass;row[`${p} Total Students`]=x.totalStudents??"";row[`${p} Students Above 60%`]=x.studentsAbove60??"";row[`${p} Students Below 60%`]=x.studentsBelow60??"";row[`${p} Students Present`]=x.studentsPresent??"";row[`${p} Students Absent`]=x.studentsAbsent??"";row[`${p} Registrations Completed`]=x.registrationsCompleted??"";row[`${p} Registrations Pending`]=x.registrationsPending??"";}); pending.forEach((x,i)=>{const p=i===0?"Mission Buniyaad":"Haryana Super 100";row[`${p} Pending Registrations`]=x.pendingRegistrations??"";row[`${p} Reason / Remarks`]=x.reasonRemarks||"";row[`${p} Committed Date`]=x.committedDate?new Date(x.committedDate).toLocaleDateString("en-IN"):"";}); row["Centre Coordinator Name"]=f?.centreCoordinatorName||"";row["School Head Name"]=f?.schoolHeadName||"";row["PDF Uploaded"]=v.attachment?"Yes":"No"; if(v.attachment?.key){try{row["Attachment"]=await getSignedUrlForSpacesKey(v.attachment.key,7*24*60*60)}catch{row["Attachment"]=""}}else row["Attachment"]=""; rows.push(row); }
   return rows;
 };
 
