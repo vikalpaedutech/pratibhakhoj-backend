@@ -168,7 +168,7 @@ const sanitize = (payload, examType, { bulk = false, allowClassChange = false } 
   };
 };
 
-const validateStudent = async (data, examType, { bulk = false, allowBlankMotherName = false } = {}) => {
+const validateStudent = async (data, examType, { bulk = false, allowBlankMotherName = false, allowExistingSrn = false } = {}) => {
   const exam = getExam(examType);
 
   const required = [
@@ -189,7 +189,7 @@ const validateStudent = async (data, examType, { bulk = false, allowBlankMotherN
     throw new ApiError(400, `Missing required fields: ${missing.join(", ")}`);
   }
 
-  if (!/^\d{10}$/.test(data.studentSrn)) {
+  if (!allowExistingSrn && !/^\d{10}$/.test(data.studentSrn)) {
     throw new ApiError(400, "SRN must be exactly 10 digits");
   }
 
@@ -594,12 +594,25 @@ export const updateAllRegistrationStudent = asyncHandler(async (req, res) => {
   });
 
   if (!current) throw new ApiError(404, "Level 1 registration not found");
+  const requestedSrn = String(req.body.studentSrn ?? current.studentSrn).trim();
+  // Keep the stored SRN as-is when it has not been changed. Format and
+  // duplicate checks apply only to an actual SRN change.
+  if (requestedSrn !== String(current.studentSrn || "").trim()) {
+    if (!/^\d{10}$/.test(requestedSrn)) {
+      throw new ApiError(400, "If you change the SRN, it must be exactly 10 digits.");
+    }
+    const duplicate = await Student.findOne({ _id: { $ne: current._id }, studentSrn: requestedSrn, examType, isActive: true }).select("_id").lean();
+    if (duplicate) throw new ApiError(409, "This SRN is already registered for this examination.");
+  }
   const data = sanitize(
-    { ...current.toObject(), ...req.body, studentSrn: current.studentSrn },
+    { ...current.toObject(), ...req.body, studentSrn: requestedSrn },
     examType,
     { allowClassChange: true }
   );
-  await validateStudent(data, examType, { allowBlankMotherName: true });
+  await validateStudent(data, examType, {
+    allowBlankMotherName: true,
+    allowExistingSrn: requestedSrn === String(current.studentSrn || "").trim(),
+  });
 
   const beforeUpdate = current.toObject();
   const { fileData, oldKeys } = await replaceUploadedFiles(current, req.files || {});
@@ -1448,214 +1461,208 @@ export const dashboard = asyncHandler(async (req, res) => {
   );
 });
 
+const parseDashboardCountThreshold = (raw) => {
+  const values = String(raw || "").split(",").map(value => value.trim()).filter(Boolean);
+  if (!values.length) return null;
+  const numbers = values.map(Number);
+  if (numbers.some(value => !Number.isFinite(value) || value < 0)) {
+    throw new ApiError(400, "Registration count filter must contain non-negative numbers separated by commas");
+  }
+  return Math.max(...numbers);
+};
+
+const parseDashboardSchoolTypes = (raw) => String(raw || "").split(",").map(value => value.trim()).filter(Boolean);
+
 export const publicLevel1DistrictBlockDashboard = asyncHandler(async (req, res) => {
   const examType = getExam(req.params.examType).code;
+  const districtId = String(req.query.districtId || "").trim();
+  if (districtId && !mongoose.Types.ObjectId.isValid(districtId)) throw new ApiError(400, "Invalid districtId");
+
+  const districtFilter = { isActive: true };
+  const blockFilter = { isActive: true };
+  const studentMatch = {
+    isActive: true, examinationLevel: 1, examType,
+    districtId: { $ne: null }, blockDistrictId: { $ne: null },
+  };
+  if (districtId) {
+    districtFilter._id = districtId;
+    blockFilter.districtId = districtId;
+    studentMatch.districtId = new mongoose.Types.ObjectId(districtId);
+  }
 
   const [districts, blocks, registrationCounts] = await Promise.all([
-    District.find({ isActive: true }).select("districtName districtId").sort({ districtName: 1 }).lean(),
-    Block.find({ isActive: true }).select("districtId blockName blockId").sort({ blockName: 1 }).lean(),
+    District.find(districtFilter).select("districtName districtId").sort({ districtName: 1 }).lean(),
+    Block.find(blockFilter).select("districtId blockName blockId").sort({ blockName: 1 }).lean(),
     Student.aggregate([
-      {
-        $match: {
-          isActive: true,
-          examinationLevel: 1,
-          examType,
-          districtId: { $ne: null },
-          blockDistrictId: { $ne: null },
-        },
-      },
+      { $match: studentMatch },
       { $group: { _id: { districtId: "$districtId", blockId: "$blockDistrictId" }, count: { $sum: 1 } } },
     ]),
   ]);
-
-  const counts = new Map(
-    registrationCounts.map((item) => [
-      `${String(item._id.districtId)}:${String(item._id.blockId)}`,
-      item.count,
-    ])
-  );
-
+  const counts = new Map(registrationCounts.map(item => [`${String(item._id.districtId)}:${String(item._id.blockId)}`, item.count]));
   const blockRowsByDistrict = new Map();
   for (const block of blocks) {
-    const districtKey = String(block.districtId);
-    const row = {
-      _id: block._id,
-      blockName: block.blockName,
-      count: counts.get(`${districtKey}:${String(block._id)}`) || 0,
-    };
-    if (!blockRowsByDistrict.has(districtKey)) blockRowsByDistrict.set(districtKey, []);
-    blockRowsByDistrict.get(districtKey).push(row);
+    const key = String(block.districtId);
+    const row = { _id: block._id, blockName: block.blockName, count: counts.get(`${key}:${String(block._id)}`) || 0 };
+    if (!blockRowsByDistrict.has(key)) blockRowsByDistrict.set(key, []);
+    blockRowsByDistrict.get(key).push(row);
   }
-
-  const result = districts.map((district) => {
-    const districtKey = String(district._id);
-    const districtBlocks = (blockRowsByDistrict.get(districtKey) || [])
-      .sort((a, b) => b.count - a.count || a.blockName.localeCompare(b.blockName));
-    const total = districtBlocks.reduce((sum, block) => sum + block.count, 0);
-
-    return {
-      _id: district._id,
-      districtName: district.districtName,
-      count: total,
-      blocks: districtBlocks,
-    };
-  }).sort((a, b) => b.count - a.count || a.districtName.localeCompare(b.districtName));
-
+  const result = districts.map(district => {
+    const districtBlocks = (blockRowsByDistrict.get(String(district._id)) || []).sort((a,b) => b.count-a.count || a.blockName.localeCompare(b.blockName));
+    return { _id: district._id, districtName: district.districtName, count: districtBlocks.reduce((sum,row)=>sum+row.count,0), blocks: districtBlocks };
+  }).sort((a,b)=>b.count-a.count || a.districtName.localeCompare(b.districtName));
   res.json(new ApiResponse(200, {
-    examType,
-    totalRegistrations: result.reduce((sum, district) => sum + district.count, 0),
-    districts: result,
+    examType, selectedDistrictId: districtId || "", totalRegistrations: result.reduce((sum,row)=>sum+row.count,0), districts: result,
   }, "Level 1 district-block dashboard fetched successfully"));
 });
 
 export const publicLevel1BlockSchoolDashboard = asyncHandler(async (req, res) => {
   const examType = getExam(req.params.examType).code;
+  const districtId = String(req.query.districtId || "").trim();
+  const blockId = String(req.query.blockId || "").trim();
+  const schoolTypes = parseDashboardSchoolTypes(req.query.schoolTypes);
+  const countThreshold = parseDashboardCountThreshold(req.query.registrationCount);
+  if (districtId && !mongoose.Types.ObjectId.isValid(districtId)) throw new ApiError(400, "Invalid districtId");
+  if (blockId && !mongoose.Types.ObjectId.isValid(blockId)) throw new ApiError(400, "Invalid blockId");
 
-  const [blocks, schoolCounts] = await Promise.all([
-    Block.find({ isActive: true }).select("districtId blockName blockId").sort({ blockName: 1 }).lean(),
+  const blockFilter = { isActive: true };
+  const schoolFilter = { isActive: true };
+  const studentMatch = { isActive: true, examinationLevel: 1, examType, blockDistrictId: { $ne: null }, schoolDistrictId: { $ne: null } };
+  if (districtId) {
+    blockFilter.districtId = districtId;
+    schoolFilter.districtId = districtId;
+    studentMatch.districtId = new mongoose.Types.ObjectId(districtId);
+  }
+  if (blockId) {
+    blockFilter._id = blockId;
+    schoolFilter.blockId = blockId;
+    studentMatch.blockDistrictId = new mongoose.Types.ObjectId(blockId);
+  }
+  if (schoolTypes.length) schoolFilter.schoolType = { $in: schoolTypes };
+
+  const [blocks, schools, schoolCounts] = await Promise.all([
+    Block.find(blockFilter).select("districtId blockName blockId").sort({ blockName: 1 }).lean(),
+    School.find(schoolFilter).select("schoolName blockId districtId schoolType").lean(),
     Student.aggregate([
-      {
-        $match: {
-          isActive: true,
-          examinationLevel: 1,
-          examType,
-          blockDistrictId: { $ne: null },
-          schoolDistrictId: { $ne: null },
-        },
-      },
-      {
-        $group: {
-          _id: { blockId: "$blockDistrictId", schoolId: "$schoolDistrictId" },
-          count: { $sum: 1 },
-        },
-      },
+      { $match: studentMatch },
+      { $group: { _id: { blockId: "$blockDistrictId", schoolId: "$schoolDistrictId" }, count: { $sum: 1 } } },
     ]),
   ]);
-
-  const counts = new Map(
-    schoolCounts.map((item) => [
-      `${String(item._id.blockId)}:${String(item._id.schoolId)}`,
-      item.count,
-    ])
-  );
-
-  const schools = await School.find({ isActive: true }).select("schoolName blockId districtId").lean();
-  const schoolMap = new Map(schools.map((school) => [String(school._id), school]));
-
-  const rows = blocks.map((block) => {
-    const blockSchools = schools
-      .filter((school) => String(school.blockId) === String(block._id))
-      .map((school) => ({
-        _id: school._id,
-        schoolName: school.schoolName,
+  const counts = new Map(schoolCounts.map(item => [`${String(item._id.blockId)}:${String(item._id.schoolId)}`, item.count]));
+  const rows = blocks.map(block => {
+    const blockSchools = schools.filter(school => String(school.blockId) === String(block._id))
+      .map(school => ({
+        _id: school._id, schoolName: school.schoolName, schoolType: school.schoolType || "",
         count: counts.get(`${String(block._id)}:${String(school._id)}`) || 0,
       }))
-      .sort((a, b) => b.count - a.count || a.schoolName.localeCompare(b.schoolName));
+      .filter(school => countThreshold === null || school.count <= countThreshold)
+      .sort((a,b)=>b.count-a.count || a.schoolName.localeCompare(b.schoolName));
+    return { _id:block._id, districtId:block.districtId, blockName:block.blockName,
+      count:blockSchools.reduce((sum,school)=>sum+school.count,0), schools:blockSchools };
+  }).sort((a,b)=>b.count-a.count || a.blockName.localeCompare(b.blockName));
 
-    const count = blockSchools.reduce((sum, school) => sum + school.count, 0);
-    return {
-      _id: block._id,
-      districtId: block.districtId,
-      blockName: block.blockName,
-      count,
-      schools: blockSchools,
-    };
-  }).sort((a, b) => b.count - a.count || a.blockName.localeCompare(b.blockName));
-
-  // Keep blocks that have no school registrations visible, including blocks whose
-  // schools are not represented in the registration aggregation.
   res.json(new ApiResponse(200, {
-    examType,
-    totalRegistrations: rows.reduce((sum, block) => sum + block.count, 0),
-    blocks: rows,
+    examType, selectedDistrictId: districtId || "", selectedBlockId: blockId || "",
+    schoolTypes, registrationCount: req.query.registrationCount || "",
+    totalRegistrations: rows.reduce((sum,row)=>sum+row.count,0), blocks: rows,
   }, "Level 1 block-school dashboard fetched successfully"));
 });
 
-
 const requireDashboardExportAccess = async (req, examType, view) => {
-  const code = `${examType}_${view === "district-block" ? "DISTRICT_BLOCK" : "BLOCK_SCHOOL"}`;
-  if (!(await hasEffectiveDashboardAccess(req.user, code))) {
-    throw new ApiError(403, "You do not have export access for this dashboard");
-  }
+  const code = `${examType}_${view === "block-school" ? "BLOCK_SCHOOL" : "DISTRICT_BLOCK"}`;
+  if (!(await hasEffectiveDashboardAccess(req.user, code))) throw new ApiError(403, "You do not have export access for this dashboard");
 };
 
 export const exportPublicLevel1Dashboard = asyncHandler(async (req, res) => {
   req.setTimeout(0); res.setTimeout(0);
   const examType = getExam(req.params.examType).code;
   const view = String(req.query.view || "district-block");
-  if (!["district-block", "block-school"].includes(view)) {
-    throw new ApiError(400, "Invalid dashboard export type");
+  if (!["district-block", "block-school", "district-wise"].includes(view)) throw new ApiError(400, "Invalid dashboard export type");
+  if (view !== "district-wise") await requireDashboardExportAccess(req, examType, view);
+
+  if (view === "district-wise") {
+    const [districts, registrationCounts] = await Promise.all([
+      District.find({ isActive: true }).select("districtName").lean(),
+      Student.aggregate([
+        { $match: { isActive: true, examinationLevel: 1, examType, districtId: { $ne: null } } },
+        { $group: { _id: "$districtId", count: { $sum: 1 } } },
+      ]),
+    ]);
+    const counts = new Map(registrationCounts.map(item => [String(item._id), item.count]));
+    const rows = districts
+      .map(district => ({ District: district.districtName, Count: counts.get(String(district._id)) || 0 }))
+      .sort((a, b) => b.Count - a.Count || a.District.localeCompare(b.District))
+      .map((row, index) => ({ "#": index + 1, ...row }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "District Wise");
+    worksheet["!cols"] = [{ wch: 8 }, { wch: 28 }, { wch: 14 }];
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${examType}_district_wise_report.xlsx"`);
+    res.setHeader("Content-Length", String(buffer.length));
+    return res.send(buffer);
   }
 
-  await requireDashboardExportAccess(req, examType, view);
+  const districtId = String(req.query.districtId || "").trim();
+  const blockId = String(req.query.blockId || "").trim();
+  const schoolTypes = parseDashboardSchoolTypes(req.query.schoolTypes);
+  const countThreshold = parseDashboardCountThreshold(req.query.registrationCount);
+  if (districtId && !mongoose.Types.ObjectId.isValid(districtId)) throw new ApiError(400, "Invalid districtId");
+  if (blockId && !mongoose.Types.ObjectId.isValid(blockId)) throw new ApiError(400, "Invalid blockId");
 
   let rows = [];
   let filename = "";
-
   if (view === "district-block") {
+    const blockFilter = { isActive: true };
+    const studentMatch = { isActive: true, examinationLevel: 1, examType, districtId: { $ne: null }, blockDistrictId: { $ne: null } };
+    if (districtId) { blockFilter.districtId = districtId; studentMatch.districtId = new mongoose.Types.ObjectId(districtId); }
     const [districts, blocks, registrationCounts] = await Promise.all([
-      District.find({ isActive: true }).select("districtName").sort({ districtName: 1 }).lean(),
-      Block.find({ isActive: true }).select("districtId blockName").sort({ blockName: 1 }).lean(),
-      Student.aggregate([
-        { $match: { isActive: true, examinationLevel: 1, examType, districtId: { $ne: null }, blockDistrictId: { $ne: null } } },
-        { $group: { _id: { districtId: "$districtId", blockId: "$blockDistrictId" }, count: { $sum: 1 } } },
-      ]),
+      District.find({ isActive: true, ...(districtId ? { _id: districtId } : {}) }).select("districtName").lean(),
+      Block.find(blockFilter).select("districtId blockName").lean(),
+      Student.aggregate([{ $match: studentMatch }, { $group: { _id: { districtId:"$districtId", blockId:"$blockDistrictId" }, count: { $sum:1 } } }]),
     ]);
-
-    const counts = new Map(
-      registrationCounts.map((item) => [`${String(item._id.districtId)}:${String(item._id.blockId)}`, item.count])
-    );
-
-    const districtMap = new Map(districts.map((d) => [String(d._id), d.districtName]));
-    rows = blocks.map((block) => ({
-      District: districtMap.get(String(block.districtId)) || "-",
-      Block: block.blockName,
-      Count: counts.get(`${String(block.districtId)}:${String(block._id)}`) || 0,
-    })).sort((a, b) => b.Count - a.Count || a.District.localeCompare(b.District) || a.Block.localeCompare(b.Block))
-      .map((row, index) => ({ "#": index + 1, ...row }));
-
+    const counts = new Map(registrationCounts.map(item=>[`${String(item._id.districtId)}:${String(item._id.blockId)}`,item.count]));
+    const districtMap = new Map(districts.map(d=>[String(d._id),d.districtName]));
+    rows = blocks.map(block=>({
+      District:districtMap.get(String(block.districtId))||"-", Block:block.blockName,
+      Count:counts.get(`${String(block.districtId)}:${String(block._id)}`)||0,
+    })).sort((a,b)=>b.Count-a.Count||a.District.localeCompare(b.District)||a.Block.localeCompare(b.Block))
+      .map((row,index)=>({"#":index+1,...row}));
     filename = `${examType}_district_block_report.xlsx`;
   } else {
-    const [blocks, schools, schoolCounts] = await Promise.all([
-      Block.find({ isActive: true }).select("districtId blockName").lean(),
-      School.find({ isActive: true }).select("districtId blockId schoolName").lean(),
-      Student.aggregate([
-        { $match: { isActive: true, examinationLevel: 1, examType, blockDistrictId: { $ne: null }, schoolDistrictId: { $ne: null } } },
-        { $group: { _id: { blockId: "$blockDistrictId", schoolId: "$schoolDistrictId" }, count: { $sum: 1 } } },
-      ]),
+    const blockFilter = { isActive:true };
+    const schoolFilter = { isActive:true };
+    const studentMatch = { isActive:true, examinationLevel:1, examType, blockDistrictId:{ $ne:null }, schoolDistrictId:{ $ne:null } };
+    if (districtId) { blockFilter.districtId=districtId; schoolFilter.districtId=districtId; studentMatch.districtId=new mongoose.Types.ObjectId(districtId); }
+    if (blockId) { blockFilter._id=blockId; schoolFilter.blockId=blockId; studentMatch.blockDistrictId=new mongoose.Types.ObjectId(blockId); }
+    if (schoolTypes.length) schoolFilter.schoolType={ $in:schoolTypes };
+    const [blocks,schools,schoolCounts]=await Promise.all([
+      Block.find(blockFilter).select("districtId blockName").lean(),
+      School.find(schoolFilter).select("districtId blockId schoolName schoolType").lean(),
+      Student.aggregate([{ $match:studentMatch },{ $group:{ _id:{ blockId:"$blockDistrictId",schoolId:"$schoolDistrictId" },count:{ $sum:1 } } }]),
     ]);
-
-    const districtIds = [...new Set(blocks.map((b) => String(b.districtId)).filter(Boolean))];
-    const districts = await District.find({ _id: { $in: districtIds } }).select("districtName").lean();
-    const districtMap = new Map(districts.map((d) => [String(d._id), d.districtName]));
-    const counts = new Map(
-      schoolCounts.map((item) => [`${String(item._id.blockId)}:${String(item._id.schoolId)}`, item.count])
-    );
-    const blockMap = new Map(blocks.map((b) => [String(b._id), b]));
-
-    rows = schools.map((school) => {
-      const block = blockMap.get(String(school.blockId));
-      return {
-        District: districtMap.get(String(school.districtId)) || "-",
-        Block: block?.blockName || "-",
-        School: school.schoolName,
-        Count: counts.get(`${String(school.blockId)}:${String(school._id)}`) || 0,
-      };
-    }).sort((a, b) => b.Count - a.Count || a.District.localeCompare(b.District) || a.Block.localeCompare(b.Block) || a.School.localeCompare(b.School))
-      .map((row, index) => ({ "#": index + 1, ...row }));
-
-    filename = `${examType}_block_school_report.xlsx`;
+    const districtIds=[...new Set(blocks.map(b=>String(b.districtId)).filter(Boolean))];
+    const districts=await District.find({ _id:{ $in:districtIds } }).select("districtName").lean();
+    const districtMap=new Map(districts.map(d=>[String(d._id),d.districtName]));
+    const counts=new Map(schoolCounts.map(item=>[`${String(item._id.blockId)}:${String(item._id.schoolId)}`,item.count]));
+    const blockMap=new Map(blocks.map(b=>[String(b._id),b]));
+    rows=schools.map(school=>{
+      const block=blockMap.get(String(school.blockId));
+      return { District:districtMap.get(String(school.districtId))||"-",Block:block?.blockName||"-",School:school.schoolName,
+        Count:counts.get(`${String(school.blockId)}:${String(school._id)}`)||0 };
+    }).filter(row=>countThreshold===null||row.Count<=countThreshold)
+      .sort((a,b)=>b.Count-a.Count||a.District.localeCompare(b.District)||a.Block.localeCompare(b.Block)||a.School.localeCompare(b.School))
+      .map((row,index)=>({"#":index+1,...row}));
+    filename=`${examType}_block_school_report.xlsx`;
   }
-
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
-  worksheet["!cols"] = Object.keys(rows[0] || {}).map((key) => ({ wch: Math.max(8, key.length + 4) }));
-  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.setHeader("Content-Length", String(buffer.length));
+  const worksheet=XLSX.utils.json_to_sheet(rows);
+  const workbook=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook,worksheet,"Report");
+  worksheet["!cols"]=Object.keys(rows[0]||{}).map(key=>({wch:Math.max(8,key.length+4)}));
+  const buffer=XLSX.write(workbook,{type:"buffer",bookType:"xlsx"});
+  res.setHeader("Content-Type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition",`attachment; filename="${filename}"`);
+  res.setHeader("Content-Length",String(buffer.length));
   res.send(buffer);
 });
 

@@ -23,6 +23,7 @@ const DUMMY = {
 
 const ROLE_SEED = [
   ["ACI", "ACI"],
+  ["DSS", "DSS"],
   ["Center Coordinator", "CENTER_COORDINATOR"],
   ["HKRN", "HKRN"],
   ["ABRC", "ABRC"],
@@ -162,6 +163,19 @@ export const seedPermissions = async () => {
       description: "Allows authorised users to manage block-wise requirements, create and manage examination centers, and assign school preferences to examination centers.",
       isActive: true,
     },
+    ...[
+      ["OFFICIAL_HOME", "Official Dashboard", "Dashboard", "Show the official home dashboard."],
+      ["OFFICIAL_MB_REGISTRATIONS", "Mission Buniyaad Registrations", "Registration", "Access Mission Buniyaad registration."],
+      ["OFFICIAL_HS100_REGISTRATIONS", "Haryana Super 100 Registrations", "Registration", "Access Haryana Super 100 registration."],
+      ["OFFICIAL_BULK_REGISTRATION", "Bulk Registration", "Registration", "Access bulk registration."],
+      ["OFFICIAL_MB_DASHBOARD", "Mission Buniyaad Dashboard", "Dashboard", "Access Mission Buniyaad dashboard."],
+      ["OFFICIAL_HS100_DASHBOARD", "Haryana Super 100 Dashboard", "Dashboard", "Access Haryana Super 100 dashboard."],
+      ["OFFICIAL_REGISTRATION_MANAGEMENT", "Registration Management", "Registration", "Access registration management reports."],
+      ["OFFICIAL_LEVEL1_DASHBOARDS", "Level 1 Dashboards", "Dashboard", "Access level 1 dashboards."],
+      ["OFFICIAL_REPORT_DASHBOARDS", "Report Dashboards", "Dashboard", "Access report dashboards."],
+      ["OFFICIAL_VERIFICATION", "Verification", "Verification", "Access registration verification."],
+      ["OFFICIAL_SCHOOL_VISIT", "School Visit", "School Visit", "Access school visit module."],
+    ].map(([code, name, module, description]) => ({ code, name, module, description, isActive: true })),
   ];
 
   for (const permission of permissions) {

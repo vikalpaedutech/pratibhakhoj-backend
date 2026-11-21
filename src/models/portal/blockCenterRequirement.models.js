@@ -6,10 +6,15 @@ const schema = new Schema({
   blockId: { type: Schema.Types.ObjectId, ref: "Block", required: true, unique: true, index: true },
   blockName: { type: String, required: true, trim: true },
   districtName: { type: String, required: true, trim: true },
-  numberOfSchools: { type: Number, required: true, min: 0 },
+  // Legacy fields retained for existing records and integrations.
+  numberOfSchools: { type: Number, required: true, min: 0, default: 0 },
   expectedRegistrationCount8: { type: Number, required: true, min: 0, default: 0 },
   expectedRegistrationCount10: { type: Number, required: true, min: 0, default: 0 },
   totalCentersRequired: { type: Number, required: true, min: 0, default: 0 },
+  expectedRegistrationsMB: { type: Number, min: 0, default: 0 },
+  centersRequiredMB: { type: Number, min: 0, default: 0 },
+  expectedRegistrationsHS100: { type: Number, min: 0, default: 0 },
+  centersRequiredHS100: { type: Number, min: 0, default: 0 },
   updatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
 }, { timestamps: true });
 

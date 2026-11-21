@@ -151,10 +151,15 @@ export const listBlockCenterRequirements = asyncHandler(async (req, res) => {
     const requirement = byBlock.get(String(block._id));
     return {
       blockId: block._id, blockName: block.blockName, districtId,
-      numberOfSchools: requirement ? requirement.numberOfSchools : "",
-      expectedRegistrationCount8: requirement ? requirement.expectedRegistrationCount8 : "",
-      expectedRegistrationCount10: requirement ? requirement.expectedRegistrationCount10 : "",
-      totalCentersRequired: requirement ? requirement.totalCentersRequired : "",
+      expectedRegistrationsMB: requirement?.expectedRegistrationsMB ?? "",
+      centersRequiredMB: requirement?.centersRequiredMB ?? "",
+      expectedRegistrationsHS100: requirement?.expectedRegistrationsHS100 ?? "",
+      centersRequiredHS100: requirement?.centersRequiredHS100 ?? "",
+      // Legacy response fields retained for older clients.
+      numberOfSchools: requirement?.numberOfSchools ?? 0,
+      expectedRegistrationCount8: requirement?.expectedRegistrationCount8 ?? 0,
+      expectedRegistrationCount10: requirement?.expectedRegistrationCount10 ?? 0,
+      totalCentersRequired: requirement?.totalCentersRequired ?? 0,
       isSubmitted: Boolean(requirement),
     };
   }));
@@ -166,12 +171,14 @@ export const saveBlockCenterRequirement = asyncHandler(async (req, res) => {
   if (!block) throw new ApiError(404, "Block not found");
   await assertDistrictRegionAccess(req, block.districtId?._id || block.districtId);
   const values = {
-    numberOfSchools: Number(req.body.numberOfSchools),
-    expectedRegistrationCount8: Number(req.body.expectedRegistrationCount8),
-    expectedRegistrationCount10: Number(req.body.expectedRegistrationCount10),
-    totalCentersRequired: Number(req.body.totalCentersRequired),
+    expectedRegistrationsMB: Number(req.body.expectedRegistrationsMB),
+    centersRequiredMB: Number(req.body.centersRequiredMB),
+    expectedRegistrationsHS100: Number(req.body.expectedRegistrationsHS100),
+    centersRequiredHS100: Number(req.body.centersRequiredHS100),
   };
-  if (Object.values(values).some((v) => !Number.isInteger(v) || v < 0)) throw new ApiError(400, "All block values must be valid non-negative whole numbers");
+  if (Object.values(values).some(v => !Number.isInteger(v) || v < 0)) {
+    throw new ApiError(400, "All program-wise values must be valid non-negative whole numbers");
+  }
   const row = await BlockCenterRequirement.findOneAndUpdate(
     { blockId: block._id },
     { $set: { ...values, blockId: block._id, districtId: block.districtId._id, blockName: block.blockName, districtName: block.districtId.districtName, updatedBy: req.user._id } },
@@ -184,15 +191,17 @@ export const listBlockExaminationCenters = asyncHandler(async (req, res) => {
   const block = await Block.findById(req.params.blockId).select("districtId").lean();
   if (!block) throw new ApiError(404, "Block not found");
   await assertDistrictRegionAccess(req, block.districtId);
-  const rows = await ExaminationCenter.find({ blockId: req.params.blockId, isActive: true }).sort({ createdAt: 1 }).lean();
+  const centerFilter = { blockId: req.params.blockId, isActive: true };
+  if (["MB", "HS100"].includes(String(req.query.program || "").toUpperCase())) centerFilter.examType = String(req.query.program).toUpperCase();
+  const rows = await ExaminationCenter.find(centerFilter).sort({ createdAt: 1 }).lean();
   const counts = await SchoolPreference.aggregate([
     { $match: { examinationCenter: { $in: rows.map((r) => r._id) } } },
     { $group: { _id: "$examinationCenter", count: { $sum: 1 } } },
   ]);
   const countMap = new Map(counts.map((x) => [String(x._id), x.count]));
   const preferenceCounts = await BlockSchoolCenterPreference.aggregate([
-    { $match: { $or: [{ preference1: { $in: rows.map(r => r._id) } }, { preference2: { $in: rows.map(r => r._id) } }] } },
-    { $project: { schoolId: 1, centers: { $setUnion: [["$preference1", "$preference2"], []] } } },
+    { $match: { preference1: { $in: rows.map(r => r._id) } } },
+    { $project: { schoolId: 1, centers: { $setUnion: [["$preference1"], []] } } },
     { $unwind: "$centers" },
     { $match: { centers: { $in: rows.map(r => r._id) } } },
     { $group: { _id: "$centers", schools: { $addToSet: "$schoolId" } } },
@@ -233,9 +242,11 @@ export const createBlockExaminationCenter = asyncHandler(async (req, res) => {
   await assertDistrictRegionAccess(req, block.districtId._id);
   const requirement = await BlockCenterRequirement.findOne({ blockId: block._id }).lean();
   if (!requirement) throw new ApiError(400, "Submit block details before creating center preferences");
-  const currentCenters = await ExaminationCenter.countDocuments({ blockId: block._id, isActive: true });
-  if (currentCenters >= requirement.totalCentersRequired) throw new ApiError(400, `Required center limit reached (${requirement.totalCentersRequired}) for this block`);
-  const payload = await centerPayload({ ...req.body, districtId: block.districtId._id, blockId: block._id });
+  const program = ["MB", "HS100"].includes(String(req.body.examType || "").toUpperCase()) ? String(req.body.examType).toUpperCase() : "MB";
+  const requiredCenters = program === "HS100" ? Number(requirement.centersRequiredHS100 ?? requirement.totalCentersRequired ?? 0) : Number(requirement.centersRequiredMB ?? requirement.totalCentersRequired ?? 0);
+  const currentCenters = await ExaminationCenter.countDocuments({ blockId: block._id, isActive: true, examType: program });
+  if (currentCenters >= requiredCenters) throw new ApiError(400, `Required ${program} center limit reached (${requiredCenters}) for this block`);
+  const payload = await centerPayload({ ...req.body, examType: program, districtId: block.districtId._id, blockId: block._id });
   const schoolRows = await normalizeCenterSchools(block._id, req.body.schools || []);
   const center = await ExaminationCenter.create(payload);
   if (schoolRows.length) await SchoolPreference.insertMany(schoolRows.map((row) => ({ ...row, examinationCenter: center._id, examinationCenterCode: center.examinationCenterCode, examinationCenterName: center.examinationCenter })));
@@ -282,33 +293,78 @@ export const listBlockSchoolCenterPreferences = asyncHandler(async (req, res) =>
   const block = await Block.findOne({ _id: req.params.blockId, isActive: true }).lean();
   if (!block) throw new ApiError(404, "Block not found");
   await assertDistrictRegionAccess(req, block.districtId);
-  const [schools, centers, saved] = await Promise.all([
+  const program = ["MB", "HS100"].includes(String(req.query.program || "").toUpperCase())
+    ? String(req.query.program).toUpperCase()
+    : "MB";
+  const [schools, centers, otherBlockCenters, saved] = await Promise.all([
     School.find({ blockId: block._id, isActive: true }).sort({ schoolName: 1 }).lean(),
-    ExaminationCenter.find({ blockId: block._id, isActive: true }).sort({ createdAt: 1 }).lean(),
-    BlockSchoolCenterPreference.find({ blockId: block._id }).lean(),
+    ExaminationCenter.find({ blockId: block._id, districtId: block.districtId, isActive: true, examType: program }).sort({ createdAt: 1 }).lean(),
+    ExaminationCenter.find({ districtId: block.districtId, blockId: { $ne: block._id }, isActive: true, examType: program })
+      .sort({ blockName: 1, examinationCenter: 1 }).lean(),
+    BlockSchoolCenterPreference.find({ blockId: block._id, program }).lean(),
   ]);
   const savedMap = new Map(saved.map(row => [String(row.schoolId), row]));
   const rows = schools.map(school => {
     const pref = savedMap.get(String(school._id));
-    return { ...school, preference1: pref?.preference1 || "", preference2: pref?.preference2 || "" };
+    return {
+      ...school,
+      preference1: pref?.preference1 || "",
+      preference2: pref?.preference2 || "",
+      otherBlockPreference: pref?.otherBlockPreference || "",
+    };
   });
-  res.json(new ApiResponse(200, { block, schools: rows, centers }, "Block school preferences fetched"));
+  res.json(new ApiResponse(200, { block, schools: rows, centers, otherBlockCenters }, "Block school preferences fetched"));
 });
 
 export const saveBlockSchoolCenterPreference = asyncHandler(async (req, res) => {
-  const { preference1 = null, preference2 = null } = req.body || {};
+  let { preference1 = null, otherBlockPreference = null } = req.body || {};
+  // Enforce a single preference per school and program at the API boundary too.
+  // If an alternate-block center is supplied, it takes precedence and the
+  // own-block preference is cleared; otherwise the alternate is cleared.
+  if (otherBlockPreference) preference1 = null;
+  else otherBlockPreference = null;
+  const program = ["MB", "HS100"].includes(String(req.body.program || "").toUpperCase())
+    ? String(req.body.program).toUpperCase()
+    : "MB";
   const block = await Block.findOne({ _id: req.params.blockId, isActive: true }).lean();
   if (!block) throw new ApiError(404, "Block not found");
   await assertDistrictRegionAccess(req, block.districtId);
   const school = await School.findOne({ _id: req.params.schoolId, blockId: block._id, isActive: true }).lean();
   if (!school) throw new ApiError(404, "School not found in this block");
-  if (preference1 && preference2 && String(preference1) === String(preference2)) throw new ApiError(400, "Preference 1 and Preference 2 must be different centers");
-  const ids = [preference1, preference2].filter(Boolean);
-  const centers = ids.length ? await ExaminationCenter.find({ _id: { $in: ids }, blockId: block._id, isActive: true }).lean() : [];
-  if (centers.length !== new Set(ids.map(String)).size) throw new ApiError(400, "Select valid examination centers from this block");
+
+  // The primary preference remains restricted to centers in the school's own block.
+  if (preference1) {
+    const ownCenter = await ExaminationCenter.findOne({
+      _id: preference1, blockId: block._id, districtId: block.districtId, isActive: true, examType: program,
+    }).lean();
+    if (!ownCenter) throw new ApiError(400, "Select a valid examination center from this block");
+  }
+
+  // The optional alternate preference can use any active center in another block
+  // within the same district and for the same program.
+  if (otherBlockPreference) {
+    const alternateCenter = await ExaminationCenter.findOne({
+      _id: otherBlockPreference,
+      districtId: block.districtId,
+      blockId: { $ne: block._id },
+      isActive: true,
+      examType: program,
+    }).lean();
+    if (!alternateCenter) {
+      throw new ApiError(400, "Select a valid examination center from another block within this district");
+    }
+  }
+
   const row = await BlockSchoolCenterPreference.findOneAndUpdate(
-    { blockId: block._id, schoolId: school._id },
-    { $set: { blockId: block._id, schoolId: school._id, preference1, preference2 } },
+    { blockId: block._id, schoolId: school._id, program },
+    { $set: {
+      blockId: block._id,
+      schoolId: school._id,
+      program,
+      preference1,
+      preference2: null,
+      otherBlockPreference,
+    } },
     { upsert: true, new: true, runValidators: true }
   );
   res.json(new ApiResponse(200, row, "School preferences saved"));

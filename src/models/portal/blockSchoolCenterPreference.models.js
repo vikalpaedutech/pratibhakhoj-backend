@@ -4,9 +4,11 @@ import { db } from "../../db/index.js";
 const schema = new Schema({
   blockId: { type: Schema.Types.ObjectId, ref: "Block", required: true, index: true },
   schoolId: { type: Schema.Types.ObjectId, ref: "School", required: true, index: true },
+  program: { type: String, enum: ["MB", "HS100"], default: "MB", index: true },
   preference1: { type: Schema.Types.ObjectId, ref: "ExaminationCenter", default: null },
   preference2: { type: Schema.Types.ObjectId, ref: "ExaminationCenter", default: null },
+  otherBlockPreference: { type: Schema.Types.ObjectId, ref: "ExaminationCenter", default: null },
 }, { timestamps: true });
 
-schema.index({ blockId: 1, schoolId: 1 }, { unique: true });
+schema.index({ blockId: 1, schoolId: 1, program: 1 }, { unique: true });
 export const BlockSchoolCenterPreference = db.models.BlockSchoolCenterPreference || db.model("BlockSchoolCenterPreference", schema, "blockSchoolCenterPreferences");
